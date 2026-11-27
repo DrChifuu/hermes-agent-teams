@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 from .client import TeamsDaemonClient
@@ -130,22 +131,48 @@ def register(ctx: Any) -> None:
             emoji="🦀",
         )
 
-    # Register `/agent-teams` slash command natively inside Hermes CLI & WebUI.
-    def _slash_agent_teams(raw_args: str, **_kwargs: Any) -> str:
-        goal = (raw_args or "").strip()
-        if not goal:
-            return (
-                "Usage: `/agent-teams <goal>`\n"
-                "Example: `/agent-teams implement auth module, write tests, and perform security review`"
+    # Register `agent-teams` as a native Hermes Skill so `/agent-teams <goal>`
+    # routes directly to the LLM chat turn (unlike `register_command`, which
+    # Hermes WebUI intercepts locally via /api/commands/exec without invoking the LLM).
+    skill_md = Path(__file__).resolve().parent / "skills" / "agent-teams" / "SKILL.md"
+    if skill_md.is_file() and callable(getattr(ctx, "register_skill", None)):
+        try:
+            ctx.register_skill(
+                "agent-teams",
+                skill_md,
+                description="Assemble a coordinated multi-agent Ferris team with DAG tasks and live panel",
             )
-        return slash_activation_directive(goal)
+        except Exception as exc:  # noqa: BLE001
+            _log.debug("Could not register bundled agent-teams skill: %s", exc)
+
+    # Register `/teams-status` as an instant zero-token diagnostic slash command.
+    def _slash_teams_status(_raw_args: str = "", **_kwargs: Any) -> str:
+        health = client.health()
+        if not health.get("ok"):
+            return f"🦀 hermes-teamsd offline: {health.get('error', 'unreachable')}"
+        ws = _resolve_workspace(ctx)
+        res = client._request("GET", f"/api/v1/state?workspace={ws}")
+        teams = res.get("teams") or []
+        archived = res.get("archived") or []
+        if not teams:
+            return (
+                f"🦀 **Hermes Agent Teams** online (v{health.get('version')}, uptime {health.get('uptimeSecs', 0)}s)\n"
+                f"No active teams in `{ws}` ({len(archived)} archived).\n"
+                "Start one with `/agent-teams <goal>`."
+            )
+        lines = [f"🦀 **Hermes Agent Teams** — {len(teams)} active team(s):"]
+        for t in teams:
+            st = t.get("stats") or {}
+            lines.append(
+                f"- **{t.get('name')}** (`{t.get('id')}`) · phase=`{t.get('phase')}` · "
+                f"{st.get('memberCount', 0)} members · {st.get('completed', 0)}/{st.get('total', 0)} done"
+            )
+        return "\n".join(lines)
 
     ctx.register_command(
-        "agent-teams",
-        _slash_agent_teams,
-        description="Assemble a coordinated multi-agent Ferris team with DAG tasks and live panel",
-        args_hint="<goal>",
-        argument_mode="text",
+        "teams-status",
+        _slash_teams_status,
+        description="Show live Hermes Agent Teams daemon and active team status (zero tokens)",
     )
 
     # Inject concise fixed Captain protocol section without rewriting prompts per turn.

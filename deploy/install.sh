@@ -18,10 +18,11 @@ echo "==> [1/4] Building hermes-teamsd release binary (CARGO_BUILD_JOBS=$BUILD_J
 echo "==> [2/4] Installing binary to $INSTALL_BIN..."
 install -m 0755 "$REPO_DIR/target/release/hermes-teamsd" "$INSTALL_BIN"
 
-echo "==> [3/4] Installing native Hermes Agent plugin to $PLUGIN_DST..."
-mkdir -p "$HERMES_HOME/plugins"
+echo "==> [3/4] Installing native Hermes Agent plugin & /agent-teams skill to $PLUGIN_DST..."
+mkdir -p "$HERMES_HOME/plugins" "$HERMES_HOME/skills/agent-teams"
 rm -rf "$PLUGIN_DST"
 cp -a "$REPO_DIR/hermes-plugin" "$PLUGIN_DST"
+cp -a "$REPO_DIR/hermes-plugin/skills/agent-teams/SKILL.md" "$HERMES_HOME/skills/agent-teams/SKILL.md"
 if command -v hermes >/dev/null 2>&1; then
   hermes plugins enable hermes-agent-teams || true
 fi
