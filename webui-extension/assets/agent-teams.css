@@ -101,6 +101,20 @@
   min-height: 380px;
 }
 
+.hat-panel.is-minimized {
+  bottom: auto !important;
+  min-height: 0 !important;
+  height: auto !important;
+  width: min(440px, calc(100vw - 24px)) !important;
+}
+
+.hat-panel.is-minimized .hat-head-subrow,
+.hat-panel.is-minimized .hat-tabs,
+.hat-panel.is-minimized .hat-body,
+.hat-panel.is-minimized .hat-resize-left {
+  display: none !important;
+}
+
 .hat-panel[hidden] {
   display: none !important;
 }

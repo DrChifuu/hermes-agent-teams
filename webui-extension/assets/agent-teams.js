@@ -239,6 +239,7 @@
 
   const uiState = {
     open: false,
+    minimized: false,
     floating: false,
     tab: 'active', // 'active' | 'archive' | 'live'
     selectedTeamId: null,
@@ -543,6 +544,114 @@
   document.body.appendChild(badge);
   document.body.appendChild(panel);
 
+  // Single persistent delegated click handler on `panel` so polling `innerHTML` refreshes
+  // can NEVER swallow a click on ✕ (close), − (minimize), ❐ (float), or header buttons.
+  panel.addEventListener('click', async (ev) => {
+    const btn = ev.target && ev.target.closest ? ev.target.closest('[data-action], [data-tab]') : null;
+    if (!btn || !panel.contains(btn)) return;
+
+    const tab = btn.getAttribute('data-tab');
+    if (tab) {
+      ev.stopPropagation();
+      uiState.tab = tab;
+      if (uiState.tab !== 'live') uiState.selectedTeamId = null;
+      uiState.selectedTaskId = null;
+      uiState.editorDirty = false;
+      uiState.stopArmed = false;
+      uiState.deleteArmed = false;
+      render();
+      if (uiState.tab === 'archive') {
+        void refreshState(true, { includeArchived: true });
+      } else if (uiState.tab === 'live') {
+        void refreshActivity(currentTeam(), false);
+      }
+      return;
+    }
+
+    const action = btn.getAttribute('data-action');
+    if (action === 'close') {
+      ev.stopPropagation();
+      uiState.open = false;
+      uiState.minimized = false;
+      uiState._userClosed = true;
+      render();
+      return;
+    }
+    if (action === 'minimize') {
+      ev.stopPropagation();
+      uiState.minimized = !uiState.minimized;
+      render();
+      return;
+    }
+    if (action === 'toggle-float') {
+      ev.stopPropagation();
+      uiState.floating = !uiState.floating;
+      uiState.minimized = false;
+      render();
+      return;
+    }
+    if (action === 'toggle-full-access') {
+      ev.stopPropagation();
+      const next = !uiState.fullAccess;
+      try {
+        const res = await apiFetch('/api/v1/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fullAccess: next }),
+        });
+        uiState.fullAccess = !!(res && res.fullAccess);
+        uiState.fullAccessLoaded = true;
+        render();
+      } catch (_e) {}
+      return;
+    }
+    const team = currentTeam();
+    if (action === 'stop' && team) {
+      ev.stopPropagation();
+      if (!uiState.stopArmed) {
+        uiState.stopArmed = true;
+        uiState.deleteArmed = false;
+        render();
+        return;
+      }
+      uiState.stopArmed = false;
+      uiState.deleteArmed = false;
+      await apiFetch('/api/v1/team/halt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          teamId: team.id,
+          workspace: team.workspace,
+          reason: 'Stopped from Hermes WebUI',
+        }),
+      });
+      await refreshState(true);
+      return;
+    }
+    if (action === 'delete' && team) {
+      ev.stopPropagation();
+      if (!uiState.deleteArmed) {
+        uiState.deleteArmed = true;
+        uiState.stopArmed = false;
+        render();
+        return;
+      }
+      uiState.deleteArmed = false;
+      await apiFetch('/api/v1/team/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          teamId: team.id,
+          workspace: team.workspace,
+          archived: !!team.archived,
+        }),
+      });
+      uiState.selectedTeamId = null;
+      uiState.selectedTaskId = null;
+      await refreshState(true);
+    }
+  });
+
   function mountChatBanner() {
     const mainChat = document.getElementById('mainChat');
     const composerWrap = document.getElementById('composerWrap');
@@ -817,6 +926,7 @@
 
     panel.hidden = !uiState.open;
     panel.classList.toggle('is-floating', uiState.floating);
+    panel.classList.toggle('is-minimized', uiState.minimized);
     renderChatBanner();
     if (!uiState.open) return;
 
@@ -855,10 +965,13 @@
             ${meta ? `<span class="hat-status-pill ${meta.cls}">${esc(meta.label)}</span>` : ''}
           </div>
           <div class="hat-head-win-controls">
+            <button type="button" class="hat-icon-btn" data-action="minimize" title="${uiState.minimized ? 'Restore' : 'Minimize'}" aria-label="Minimize panel">${
+              uiState.minimized ? '＋' : '−'
+            }</button>
             <button type="button" class="hat-icon-btn" data-action="toggle-float" title="Dock / Float" aria-label="Dock / Float">${
               uiState.floating ? '◧' : '❐'
             }</button>
-            <button type="button" class="hat-icon-btn hat-close-btn" data-action="close" title="Collapse" aria-label="Close panel">✕</button>
+            <button type="button" class="hat-icon-btn hat-close-btn" data-action="close" title="Close" aria-label="Close panel">✕</button>
           </div>
         </div>
         <div class="hat-head-subrow">
@@ -1364,34 +1477,9 @@
       </div>`;
   }
 
-  function wireHeaderControls(team) {
-    panel.querySelector('[data-action="close"]').addEventListener('click', () => {
-      uiState.open = false;
-      uiState._userClosed = true;
-      render();
-    });
-    panel.querySelector('[data-action="toggle-float"]').addEventListener('click', () => {
-      uiState.floating = !uiState.floating;
-      render();
-    });
-    panel.querySelectorAll('[data-tab]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        uiState.tab = btn.getAttribute('data-tab');
-        if (uiState.tab !== 'live') {
-          uiState.selectedTeamId = null;
-        }
-        uiState.selectedTaskId = null;
-        uiState.editorDirty = false;
-        uiState.stopArmed = false;
-        uiState.deleteArmed = false;
-        render();
-        if (uiState.tab === 'archive') {
-          void refreshState(true, { includeArchived: true });
-        } else if (uiState.tab === 'live') {
-          void refreshActivity(currentTeam(), false);
-        }
-      });
-    });
+  function wireHeaderControls(_team) {
+    // Button clicks (close, minimize, float, full-access, stop, delete, tabs) are handled via
+    // persistent event delegation on `panel` so polling refreshes never swallow clicks.
     const switcher = panel.querySelector('[data-action="switch-team"]');
     if (switcher) {
       switcher.addEventListener('change', () => {
@@ -1406,68 +1494,6 @@
         } else if (uiState.tab === 'live') {
           void refreshActivity(currentTeam(), false);
         }
-      });
-    }
-    const fullAccessBtn = panel.querySelector('[data-action="toggle-full-access"]');
-    if (fullAccessBtn) {
-      fullAccessBtn.addEventListener('click', async () => {
-        const next = !uiState.fullAccess;
-        try {
-          const res = await apiFetch('/api/v1/settings', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ fullAccess: next }),
-          });
-          uiState.fullAccess = !!(res && res.fullAccess);
-          uiState.fullAccessLoaded = true;
-          render();
-        } catch (_e) {}
-      });
-    }
-    const stopBtn = panel.querySelector('[data-action="stop"]');
-    if (stopBtn && team) {
-      stopBtn.addEventListener('click', async () => {
-        if (!uiState.stopArmed) {
-          uiState.stopArmed = true;
-          render();
-          return;
-        }
-        uiState.stopArmed = false;
-        uiState.deleteArmed = false;
-        await apiFetch('/api/v1/team/halt', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            teamId: team.id,
-            workspace: team.workspace,
-            reason: 'Stopped from Hermes WebUI',
-          }),
-        });
-        await refreshState(true);
-      });
-    }
-    const deleteBtn = panel.querySelector('[data-action="delete"]');
-    if (deleteBtn && team) {
-      deleteBtn.addEventListener('click', async () => {
-        if (!uiState.deleteArmed) {
-          uiState.deleteArmed = true;
-          uiState.stopArmed = false;
-          render();
-          return;
-        }
-        uiState.deleteArmed = false;
-        await apiFetch('/api/v1/team/delete', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            teamId: team.id,
-            workspace: team.workspace,
-            archived: !!team.archived,
-          }),
-        });
-        uiState.selectedTeamId = null;
-        uiState.selectedTaskId = null;
-        await refreshState(true);
       });
     }
 

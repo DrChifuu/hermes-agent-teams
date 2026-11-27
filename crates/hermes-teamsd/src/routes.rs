@@ -464,27 +464,27 @@ async fn dispatch_tool_handler(
             let out = state.with_engine(&ws, |engine| engine.create_team(input))?;
             state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "team_created");
-            Ok(Json(serde_json::to_value(out)?))
+            Ok(Json(compact_tool_output(&out)))
         }
         "agent_teams_approve" => {
             let team_id = extract_str(&env.args, "teamId", "team_id")?;
             let out = state.with_engine(&ws, |engine| engine.approve_team(&team_id))?;
             state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "team_approved");
-            Ok(Json(serde_json::to_value(out)?))
+            Ok(Json(compact_tool_output(&out)))
         }
         "agent_teams_edit_plan" => {
             let input: EditPlanInput = serde_json::from_value(env.args)?;
             let out = state.with_engine(&ws, |engine| engine.edit_plan(input))?;
             state.publish_event(&ws, Some(out.team.id.clone()), "plan_edited");
-            Ok(Json(serde_json::to_value(out)?))
+            Ok(Json(compact_tool_output(&out)))
         }
         "agent_teams_add_member" => {
             let input: AddMemberInput = serde_json::from_value(env.args)?;
             let out = state.with_engine(&ws, |engine| engine.add_member(input))?;
             state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "member_added");
-            Ok(Json(serde_json::to_value(out)?))
+            Ok(Json(compact_tool_output(&out)))
         }
         "agent_teams_remove_member" => {
             let team_id = extract_str(&env.args, "teamId", "team_id")?;
@@ -492,21 +492,21 @@ async fn dispatch_tool_handler(
             let out = state.with_engine(&ws, |engine| engine.remove_member(&team_id, &member))?;
             state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "member_removed");
-            Ok(Json(serde_json::to_value(out)?))
+            Ok(Json(compact_tool_output(&out)))
         }
         "agent_teams_create_task" => {
             let input: CreateTaskInput = serde_json::from_value(env.args)?;
             let out = state.with_engine(&ws, |engine| engine.create_task(input))?;
             state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "task_created");
-            Ok(Json(serde_json::to_value(out)?))
+            Ok(Json(compact_tool_output(&out)))
         }
         "agent_teams_reassign_task" => {
             let input: ReassignTaskInput = serde_json::from_value(env.args)?;
             let out = state.with_engine(&ws, |engine| engine.reassign_task(&input))?;
             state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "task_reassigned");
-            Ok(Json(serde_json::to_value(out)?))
+            Ok(Json(compact_tool_output(&out)))
         }
         "agent_teams_claim_task" => {
             let team_id = extract_str(&env.args, "teamId", "team_id")?;
@@ -521,7 +521,7 @@ async fn dispatch_tool_handler(
             })?;
             state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "task_claimed");
-            Ok(Json(serde_json::to_value(out)?))
+            Ok(Json(compact_tool_output(&out)))
         }
         "agent_teams_update_task" => {
             let mut val = env.args;
@@ -549,13 +549,13 @@ async fn dispatch_tool_handler(
             );
             state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "task_updated");
-            Ok(Json(serde_json::to_value(out)?))
+            Ok(Json(compact_tool_output(&out)))
         }
         "agent_teams_amend_task" => {
             let input: AmendTaskInput = serde_json::from_value(env.args)?;
             let out = state.with_engine(&ws, |engine| engine.amend_task(input))?;
             state.publish_event(&ws, Some(out.team.id.clone()), "task_amended");
-            Ok(Json(serde_json::to_value(out)?))
+            Ok(Json(compact_tool_output(&out)))
         }
         "agent_teams_send_message" => {
             let mut val = env.args;
@@ -734,6 +734,59 @@ async fn team_delete_handler(
         "deleted": body.team_id,
         "archived": body.archived,
     })))
+}
+
+/// Compact tool response for LLM tool calls (avoids bloating Captain context with 50KB of historical outputs).
+fn compact_tool_output(out: &hermes_teams_core::operations::OperationOutput) -> Value {
+    let members: Vec<Value> = out
+        .team
+        .members
+        .iter()
+        .map(|m| {
+            json!({
+                "name": m.name,
+                "role": m.role,
+                "status": m.status,
+                "provider": m.provider,
+                "model": m.model,
+                "toolPolicy": m.tool_policy,
+            })
+        })
+        .collect();
+    let tasks: Vec<Value> = out
+        .team
+        .tasks
+        .iter()
+        .map(|t| {
+            json!({
+                "id": t.id,
+                "subject": t.subject,
+                "status": t.status,
+                "assignee": t.assignee,
+                "dependencies": t.dependencies,
+                "verdict": t.verdict,
+                "round": t.round,
+                "attemptId": t.attempt_id,
+            })
+        })
+        .collect();
+    let mut obj = json!({
+        "ok": true,
+        "summary": out.summary,
+        "teamId": out.team.id,
+        "phase": out.team.effective_phase(),
+        "halted": out.team.is_halted(),
+        "escalated": out.team.escalated.unwrap_or(false),
+        "members": members,
+        "tasks": tasks,
+        "directives": out.directives,
+    });
+    if let Some(map) = obj.as_object_mut() {
+        for (k, v) in &out.extra {
+            map.insert(k.clone(), v.clone());
+        }
+    }
+    obj
 }
 
 fn extract_str(val: &Value, camel: &str, snake: &str) -> Result<String, ApiError> {
