@@ -22,6 +22,9 @@ echo "==> [3/4] Installing native Hermes Agent plugin to $PLUGIN_DST..."
 mkdir -p "$HERMES_HOME/plugins"
 rm -rf "$PLUGIN_DST"
 cp -a "$REPO_DIR/hermes-plugin" "$PLUGIN_DST"
+if command -v hermes >/dev/null 2>&1; then
+  hermes plugins enable hermes-agent-teams || true
+fi
 
 echo "==> [4/4] Installing official Hermes WebUI extension to $WEBUI_EXT_DST..."
 mkdir -p "$WEBUI_EXT_ROOT"
