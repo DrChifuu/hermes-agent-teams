@@ -5,21 +5,28 @@
 :root {
   --hat-panel-width: 780px;
   --hat-rust: #f74c00;
-  --hat-rust-soft: rgba(247, 76, 0, 0.14);
-  --hat-green: #22a06b;
-  --hat-green-soft: rgba(34, 160, 107, 0.14);
-  --hat-blue: #2563eb;
-  --hat-blue-soft: rgba(37, 99, 235, 0.14);
-  --hat-amber: #d97706;
-  --hat-amber-soft: rgba(217, 119, 6, 0.16);
-  --hat-red: #dc2626;
-  --hat-red-soft: rgba(220, 38, 38, 0.14);
-  --hat-bg: var(--surface, #ffffff);
-  --hat-bg2: var(--surface2, #f7f8fa);
-  --hat-text: var(--text, #1f2328);
-  --hat-muted: var(--muted, #656d76);
-  --hat-border: var(--border, rgba(31, 35, 40, 0.14));
-  --hat-shadow: 0 14px 40px rgba(0, 0, 0, 0.18), 0 2px 10px rgba(0, 0, 0, 0.08);
+  --hat-rust-hi: #ff6b2b;
+  --hat-rust-soft: rgba(247, 76, 0, 0.16);
+  --hat-green: #22c55e;
+  --hat-green-soft: rgba(34, 197, 94, 0.16);
+  --hat-blue: #3b82f6;
+  --hat-blue-soft: rgba(59, 130, 246, 0.16);
+  --hat-amber: #f59e0b;
+  --hat-amber-soft: rgba(245, 158, 11, 0.16);
+  --hat-red: #ef4444;
+  --hat-red-soft: rgba(239, 68, 68, 0.16);
+  /* Use official Hermes WebUI theme tokens (all light/dark/custom skins define these) */
+  --hat-bg: var(--bg, #121316);
+  --hat-bg2: var(--sidebar, var(--surface, #1b1c20));
+  --hat-bg3: var(--surface, var(--surface-subtle, #23252a));
+  --hat-input: var(--code-bg, var(--input-bg, #111215));
+  --hat-hover: var(--hover-bg, var(--surface-subtle-hover, rgba(255, 255, 255, 0.08)));
+  --hat-text: var(--text, #ecebe4);
+  --hat-strong: var(--strong, var(--text, #faf9f5));
+  --hat-muted: var(--muted, #a1a1aa);
+  --hat-border: var(--border, rgba(255, 255, 255, 0.14));
+  --hat-border2: var(--border2, rgba(255, 255, 255, 0.22));
+  --hat-shadow: 0 18px 48px rgba(0, 0, 0, 0.45), 0 2px 12px rgba(0, 0, 0, 0.28);
 }
 
 /* Floating Ferris launcher pill */
@@ -33,18 +40,19 @@
   gap: 8px;
   height: 36px;
   padding: 0 13px 0 8px;
-  border: 1px solid var(--hat-border);
+  border: 1px solid var(--hat-border2);
   border-radius: 999px;
-  background: var(--hat-bg);
-  color: var(--hat-text);
+  background: var(--hat-bg2);
+  color: var(--hat-strong);
   box-shadow: var(--hat-shadow);
   font: 600 12.5px/1 var(--font-ui, system-ui, sans-serif);
   cursor: pointer;
-  transition: transform 120ms ease, border-color 150ms ease;
+  transition: transform 120ms ease, border-color 150ms ease, background 150ms ease;
 }
 
 .hat-badge:hover {
   border-color: var(--hat-rust);
+  background: var(--hat-bg3);
   transform: translateY(-1px);
 }
 
@@ -130,6 +138,7 @@
 .hat-head-title {
   font-size: 14px;
   font-weight: 700;
+  color: var(--hat-strong);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -139,18 +148,22 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--hat-muted);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .hat-status-pill {
-  padding: 2px 8px;
+  padding: 3px 9px;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 600;
-  background: var(--hat-bg);
-  border: 1px solid var(--hat-border);
+  line-height: 1.2;
+  white-space: nowrap;
+  flex-shrink: 0;
+  background: var(--hat-bg3);
+  border: 1px solid var(--hat-border2);
   color: var(--hat-muted);
 }
 
@@ -163,7 +176,7 @@
 .hat-status-pill.is-staged {
   background: var(--hat-rust-soft);
   border-color: var(--hat-rust);
-  color: var(--hat-rust);
+  color: var(--hat-rust-hi);
 }
 
 .hat-status-pill.is-done {
@@ -809,26 +822,43 @@
 .hat-select {
   width: 100%;
   box-sizing: border-box;
-  padding: 5px 8px;
+  padding: 6px 9px;
   border-radius: 7px;
   border: 1px solid var(--hat-border);
-  background: var(--hat-bg);
+  background: var(--hat-input);
   color: var(--hat-text);
   font-size: 12px;
+}
+
+.hat-input::placeholder {
+  color: var(--hat-muted);
+  opacity: 0.75;
+}
+
+.hat-input:focus,
+.hat-select:focus {
+  outline: none;
+  border-color: var(--hat-rust);
+  box-shadow: 0 0 0 2px var(--hat-rust-soft);
+}
+
+.hat-select option {
+  background: var(--hat-bg2);
+  color: var(--hat-text);
 }
 
 .hat-task-badge {
   font-size: 11px;
   font-weight: 700;
   text-align: center;
-  color: var(--hat-rust);
+  color: var(--hat-rust-hi);
 }
 
 .hat-plan-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding-top: 6px;
+  padding-top: 8px;
 }
 
 .hat-btn-primary,
@@ -840,23 +870,29 @@
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  padding: 7px 12px;
+  padding: 7px 13px;
   border: 1px solid transparent;
+  transition: background 120ms ease, border-color 120ms ease, filter 120ms ease;
 }
 
 .hat-btn-primary {
   background: var(--hat-rust);
-  color: #fff;
+  color: #ffffff;
 }
 
 .hat-btn-primary:hover {
-  filter: brightness(1.06);
+  background: var(--hat-rust-hi);
 }
 
 .hat-btn-secondary {
-  background: var(--hat-bg2);
-  border-color: var(--hat-border);
-  color: var(--hat-text);
+  background: var(--hat-bg3);
+  border-color: var(--hat-border2);
+  color: var(--hat-strong);
+}
+
+.hat-btn-secondary:hover {
+  background: var(--hat-hover);
+  border-color: var(--hat-rust);
 }
 
 .hat-btn-danger {
@@ -865,16 +901,30 @@
   color: var(--hat-red);
 }
 
+.hat-btn-danger:hover {
+  background: var(--hat-red);
+  color: #ffffff;
+}
+
 .hat-btn-ghost {
   background: transparent;
-  color: var(--hat-rust);
+  color: var(--hat-rust-hi);
   padding: 3px 8px;
+}
+
+.hat-btn-ghost:hover {
+  background: var(--hat-rust-soft);
 }
 
 .hat-btn-icon {
   background: transparent;
   color: var(--hat-muted);
-  padding: 3px 6px;
+  padding: 4px 7px;
+}
+
+.hat-btn-icon:hover {
+  background: var(--hat-hover);
+  color: var(--hat-strong);
 }
 
 .hat-empty-state,

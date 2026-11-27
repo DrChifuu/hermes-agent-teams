@@ -10,7 +10,7 @@
     "assets/agent-teams.js"
   ],
   "stylesheets": [
-    "assets/agent-teams.css"
+    "assets/agent-teams.css?v=2"
   ],
   "sidecar": {
     "type": "loopback",
