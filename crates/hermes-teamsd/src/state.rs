@@ -50,7 +50,12 @@ pub struct AppState(Arc<InnerState>);
 impl AppState {
     pub fn new(auth_mode: AuthMode, default_workspace: PathBuf, config: TeamsConfig) -> Self {
         let (events_tx, _) = broadcast::channel(256);
-        let known = vec![default_workspace.clone()];
+        let mut known = vec![default_workspace.clone()];
+        for ws in Self::load_seed_workspaces() {
+            if ws.is_dir() && !known.iter().any(|p| p == &ws) {
+                known.push(ws);
+            }
+        }
         Self(Arc::new(InnerState {
             started_at: Instant::now(),
             auth_mode,
@@ -61,6 +66,75 @@ impl AppState {
             events_tx,
             known_workspaces: Mutex::new(known),
         }))
+    }
+
+    fn workspaces_registry_path() -> Option<PathBuf> {
+        let home = std::env::var("HERMES_HOME")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var("HOME")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+                    .map(|h| PathBuf::from(h).join(".hermes"))
+            })?;
+        Some(home.join("agent-teams-workspaces.json"))
+    }
+
+    fn load_seed_workspaces() -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        if let Some(reg_path) = Self::workspaces_registry_path() {
+            if let Ok(raw) = std::fs::read_to_string(&reg_path) {
+                if let Ok(list) = serde_json::from_str::<Vec<String>>(&raw) {
+                    for s in list {
+                        let p = PathBuf::from(s.trim());
+                        if !s.trim().is_empty() && p.is_dir() && !out.iter().any(|x| x == &p) {
+                            out.push(p);
+                        }
+                    }
+                }
+            }
+            // Also seed Hermes's configured terminal.cwd from config.yaml if present.
+            if let Some(hermes_home) = reg_path.parent() {
+                let cfg_path = hermes_home.join("config.yaml");
+                if let Ok(raw) = std::fs::read_to_string(&cfg_path) {
+                    for line in raw.lines() {
+                        let trimmed = line.trim();
+                        if let Some(rest) = trimmed.strip_prefix("cwd:") {
+                            let val = rest.trim().trim_matches('"').trim_matches('\'');
+                            if !val.is_empty() {
+                                let p = PathBuf::from(val);
+                                if p.is_dir() && !out.iter().any(|x| x == &p) {
+                                    out.push(p);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn persist_workspaces(list: &[PathBuf]) {
+        let Some(reg_path) = Self::workspaces_registry_path() else {
+            return;
+        };
+        let strings: Vec<String> = list
+            .iter()
+            .filter(|p| p.is_dir())
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        if let Ok(bytes) = serde_json::to_vec_pretty(&strings) {
+            if let Some(parent) = reg_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let tmp = reg_path.with_extension("json.tmp");
+            if std::fs::write(&tmp, bytes).is_ok() {
+                let _ = std::fs::rename(&tmp, &reg_path);
+            }
+        }
     }
 
     pub fn uptime_secs(&self) -> u64 {
@@ -80,6 +154,23 @@ impl AppState {
         path
     }
 
+    /// Resolve workspace for a specific `team_id`: honors explicit `raw` workspace if provided,
+    /// otherwise locates the known workspace on disk that actually owns `.agent-teams/<team_id>`.
+    pub fn resolve_workspace_for_team(&self, raw: Option<&str>, team_id: &str) -> PathBuf {
+        if let Some(ws) = raw.map(str::trim).filter(|s| !s.is_empty()) {
+            return self.resolve_workspace(Some(ws));
+        }
+        for candidate in self.known_workspaces() {
+            let store = TeamStore::for_workspace(&candidate, Some(&self.0.config.state_dir));
+            if store.team_file(team_id).is_file()
+                || store.archive_dir(team_id).join("team.json").is_file()
+            {
+                return candidate;
+            }
+        }
+        self.0.default_workspace.clone()
+    }
+
     pub fn remember_workspace(&self, ws: &Path) {
         if let Ok(mut list) = self.0.known_workspaces.lock() {
             if !list.iter().any(|p| p == ws) {
@@ -87,6 +178,7 @@ impl AppState {
                 if list.len() > 64 {
                     list.remove(0);
                 }
+                Self::persist_workspaces(&list);
             }
         }
     }

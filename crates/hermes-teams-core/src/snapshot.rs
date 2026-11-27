@@ -83,6 +83,8 @@ pub struct TeamSnapshot {
     pub id: String,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub captain_session_id: String,
     pub phase: TeamPhase,
@@ -246,9 +248,16 @@ fn build_team_snapshot_with_dir(
         message_count,
     };
 
+    let workspace = store
+        .root()
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .filter(|s| !s.is_empty());
+
     TeamSnapshot {
         id: team.id.clone(),
         name: team.name.clone(),
+        workspace,
         description: team.description.clone(),
         captain_session_id: team.captain_session_id.clone(),
         phase: team.effective_phase(),

@@ -74,6 +74,14 @@
     let discardArmed = false;
     let dirty = false;
     let busy = false;
+    let errorMsg = '';
+
+    function setDirty(val) {
+      dirty = val;
+      if (typeof opts.onDirtyChange === 'function') {
+        opts.onDirtyChange(val);
+      }
+    }
 
     loadHermesModelCatalog().then((catalog) => {
       function paint() {
@@ -156,6 +164,8 @@
               <div class="hat-plan-list">${taskRows}</div>
             </div>
 
+            ${errorMsg ? `<div class="hat-plan-error" role="alert">${esc(errorMsg)}</div>` : ''}
+
             <div class="hat-plan-actions">
               <button type="button" class="hat-btn-primary" data-action="approve">
                 ▶ ${esc(tr('approveAndRun'))}
@@ -175,8 +185,8 @@
         container.querySelectorAll('.hat-plan-member').forEach((row) => {
           const idx = Number(row.getAttribute('data-midx'));
           row.querySelectorAll('[data-field]').forEach((el) => {
-            el.addEventListener('change', () => {
-              dirty = true;
+            const syncMember = () => {
+              setDirty(true);
               const f = el.getAttribute('data-field');
               if (f === 'route') {
                 const v = el.value || '';
@@ -191,10 +201,12 @@
               } else {
                 draft.members[idx][f] = el.value;
               }
-            });
+            };
+            el.addEventListener('change', syncMember);
+            if (el.tagName === 'INPUT') el.addEventListener('input', syncMember);
           });
           row.querySelector('.hat-remove-member').addEventListener('click', () => {
-            dirty = true;
+            setDirty(true);
             draft.members.splice(idx, 1);
             paint();
           });
@@ -203,8 +215,8 @@
         container.querySelectorAll('.hat-plan-task').forEach((row) => {
           const idx = Number(row.getAttribute('data-tidx'));
           row.querySelectorAll('[data-field]').forEach((el) => {
-            el.addEventListener('change', () => {
-              dirty = true;
+            const syncTask = () => {
+              setDirty(true);
               const f = el.getAttribute('data-field');
               if (f === 'dependencies') {
                 draft.tasks[idx].dependencies = el.value
@@ -214,17 +226,19 @@
               } else {
                 draft.tasks[idx][f] = el.value;
               }
-            });
+            };
+            el.addEventListener('change', syncTask);
+            if (el.tagName === 'INPUT') el.addEventListener('input', syncTask);
           });
           row.querySelector('.hat-remove-task').addEventListener('click', () => {
-            dirty = true;
+            setDirty(true);
             draft.tasks.splice(idx, 1);
             paint();
           });
         });
 
         container.querySelector('[data-action="add-member"]').addEventListener('click', () => {
-          dirty = true;
+          setDirty(true);
           draft.members.push({
             name: `member-${draft.members.length + 1}`,
             role: 'engineer',
@@ -236,7 +250,7 @@
         });
 
         container.querySelector('[data-action="add-task"]').addEventListener('click', () => {
-          dirty = true;
+          setDirty(true);
           draft.tasks.push({
             id: `t${draft.tasks.length + 1}`,
             subject: '',
@@ -249,9 +263,13 @@
         container.querySelector('[data-action="save"]').addEventListener('click', async () => {
           if (busy) return;
           busy = true;
+          errorMsg = '';
           try {
             await opts.onSaveDraft(team.id, cleanDraft(draft));
-            dirty = false;
+            setDirty(false);
+          } catch (err) {
+            errorMsg = (err && err.message) || 'Failed to save draft';
+            paint();
           } finally {
             busy = false;
           }
@@ -260,20 +278,36 @@
         container.querySelector('[data-action="approve"]').addEventListener('click', async (ev) => {
           if (busy) return;
           busy = true;
-          ev.currentTarget.disabled = true;
+          errorMsg = '';
+          const btn = ev.currentTarget;
+          btn.disabled = true;
           try {
             if (dirty) {
               await opts.onSaveDraft(team.id, cleanDraft(draft));
-              dirty = false;
+              setDirty(false);
             }
             await opts.onApprove(team.id);
+          } catch (err) {
+            errorMsg = (err && err.message) || 'Failed to approve plan';
+            btn.disabled = false;
+            paint();
           } finally {
             busy = false;
           }
         });
 
         container.querySelector('[data-action="feedback"]').addEventListener('click', async () => {
-          await opts.onFeedback(team.id);
+          if (busy) return;
+          busy = true;
+          errorMsg = '';
+          try {
+            await opts.onFeedback(team.id);
+          } catch (err) {
+            errorMsg = (err && err.message) || 'Failed to request feedback';
+            paint();
+          } finally {
+            busy = false;
+          }
         });
 
         container.querySelector('[data-action="discard"]').addEventListener('click', async () => {
@@ -282,7 +316,18 @@
             paint();
             return;
           }
-          await opts.onDiscard(team.id);
+          if (busy) return;
+          busy = true;
+          errorMsg = '';
+          try {
+            await opts.onDiscard(team.id);
+          } catch (err) {
+            errorMsg = (err && err.message) || 'Failed to discard plan';
+            discardArmed = false;
+            paint();
+          } finally {
+            busy = false;
+          }
         });
       }
 

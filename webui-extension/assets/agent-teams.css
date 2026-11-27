@@ -268,9 +268,32 @@
 .hat-tabs {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 8px 14px 0;
   border-bottom: 1px solid var(--hat-border);
+}
+
+.hat-team-switcher {
+  margin-left: auto;
+  margin-bottom: 5px;
+  max-width: 240px;
+  padding: 4px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--hat-border);
+  background: var(--hat-input);
+  color: var(--hat-text);
+  font-size: 11.5px;
+}
+
+.hat-plan-error {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--hat-red-soft);
+  border: 1px solid var(--hat-red);
+  color: var(--hat-red);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .hat-tab {

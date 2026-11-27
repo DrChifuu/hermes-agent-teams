@@ -131,10 +131,13 @@
     open: false,
     floating: false,
     tab: 'active',
+    selectedTeamId: null,
     membersCollapsed: false,
     selectedTaskId: null,
     hoveredTaskId: null,
     stopArmed: false,
+    editorDirty: false,
+    lastPayloadSig: '',
     apiBase: PROXY_BASE,
     payload: { teams: [], archived: [] },
     sse: null,
@@ -174,7 +177,7 @@
     throw lastErr || new Error('hermes-teamsd unreachable');
   }
 
-  async function refreshState() {
+  async function refreshState(forceRender) {
     try {
       const sid = detectCurrentSessionId();
       const qs = sid ? `?session_id=${encodeURIComponent(sid)}` : '';
@@ -183,15 +186,35 @@
       if (sid && (!data.teams || !data.teams.length) && (!data.archived || !data.archived.length)) {
         data = await apiFetch('/api/v1/state');
       }
-      uiState.payload = data || { teams: [], archived: [] };
+      const nextPayload = data || { teams: [], archived: [] };
+      const nextSig = JSON.stringify(nextPayload);
+      const changed = nextSig !== uiState.lastPayloadSig;
+      uiState.payload = nextPayload;
+      uiState.lastPayloadSig = nextSig;
 
       const autoOpen = extHandle && extHandle.settings ? extHandle.settings.get('auto_open_panel') : true;
-      if (autoOpen && !uiState._userClosed && uiState.payload.teams && uiState.payload.teams.length > 0) {
+      if (autoOpen && !uiState._userClosed && uiState.payload.teams && uiState.payload.teams.length > 0 && !uiState.open) {
         uiState.open = true;
+        forceRender = true;
       }
+
+      if (!forceRender && !changed) return;
+
+      // Avoid clobbering unsaved edits or stealing focus while editing a staged plan.
+      const activeTeam = currentTeam();
+      const editingStaged =
+        activeTeam &&
+        activeTeam.phase === 'staged' &&
+        !activeTeam.archived &&
+        (uiState.editorDirty ||
+          (panel.contains(document.activeElement) &&
+            document.activeElement &&
+            document.activeElement.closest('.hat-plan-shell')));
+      if (!forceRender && editingStaged) return;
+
       render();
     } catch (_err) {
-      render();
+      if (forceRender) render();
     }
   }
 
@@ -244,7 +267,12 @@
 
   function currentTeam() {
     const list = uiState.tab === 'archive' ? uiState.payload.archived : uiState.payload.teams;
-    return Array.isArray(list) && list.length ? list[0] : null;
+    if (!Array.isArray(list) || !list.length) return null;
+    if (uiState.selectedTeamId) {
+      const found = list.find((t) => t.id === uiState.selectedTeamId);
+      if (found) return found;
+    }
+    return list[0];
   }
 
   function statusMeta(team) {
@@ -326,6 +354,18 @@
         <button type="button" class="hat-tab${uiState.tab === 'archive' ? ' is-active' : ''}" data-tab="archive">
           ${esc(tr('archiveTab'))} (${archivedTeams.length})
         </button>
+        ${
+          (uiState.tab === 'archive' ? archivedTeams : activeTeams).length > 1
+            ? `<select class="hat-team-switcher" data-action="switch-team" aria-label="Select team">
+                ${(uiState.tab === 'archive' ? archivedTeams : activeTeams)
+                  .map(
+                    (t) =>
+                      `<option value="${esc(t.id)}"${team && t.id === team.id ? ' selected' : ''}>${esc(t.name)} (${(t.stats && t.stats.completed) || 0}/${(t.stats && t.stats.total) || 0})</option>`
+                  )
+                  .join('')}
+              </select>`
+            : ''
+        }
       </div>
       <div class="hat-body" id="hat-body"></div>
     `;
@@ -346,37 +386,44 @@
     if (team.phase === 'staged' && !team.archived) {
       window.HermesTeamsPlanEditor.renderPlanEditor(body, team, {
         tr,
+        onDirtyChange: (isDirty) => {
+          uiState.editorDirty = !!isDirty;
+        },
         onSaveDraft: async (teamId, draft) => {
           await apiFetch('/api/v1/plan/edit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(Object.assign({ teamId }, draft)),
+            body: JSON.stringify(Object.assign({ teamId, workspace: team.workspace }, draft)),
           });
-          await refreshState();
+          uiState.editorDirty = false;
+          await refreshState(true);
         },
         onApprove: async (teamId) => {
           await apiFetch('/api/v1/plan/approve', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ teamId }),
+            body: JSON.stringify({ teamId, workspace: team.workspace }),
           });
-          await refreshState();
+          uiState.editorDirty = false;
+          await refreshState(true);
         },
         onFeedback: async (teamId) => {
           await apiFetch('/api/v1/plan/feedback', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ teamId }),
+            body: JSON.stringify({ teamId, workspace: team.workspace }),
           });
-          await refreshState();
+          uiState.editorDirty = false;
+          await refreshState(true);
         },
         onDiscard: async (teamId) => {
           await apiFetch('/api/v1/plan/discard', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ teamId }),
+            body: JSON.stringify({ teamId, workspace: team.workspace }),
           });
-          await refreshState();
+          uiState.editorDirty = false;
+          await refreshState(true);
         },
       });
       return;
@@ -560,10 +607,21 @@
     panel.querySelectorAll('[data-tab]').forEach((btn) => {
       btn.addEventListener('click', () => {
         uiState.tab = btn.getAttribute('data-tab');
+        uiState.selectedTeamId = null;
         uiState.selectedTaskId = null;
+        uiState.editorDirty = false;
         render();
       });
     });
+    const switcher = panel.querySelector('[data-action="switch-team"]');
+    if (switcher) {
+      switcher.addEventListener('change', () => {
+        uiState.selectedTeamId = switcher.value || null;
+        uiState.selectedTaskId = null;
+        uiState.editorDirty = false;
+        render();
+      });
+    }
     const stopBtn = panel.querySelector('[data-action="stop"]');
     if (stopBtn && team) {
       stopBtn.addEventListener('click', async () => {
@@ -576,9 +634,13 @@
         await apiFetch('/api/v1/team/halt', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ teamId: team.id, reason: 'Stopped from Hermes WebUI' }),
+          body: JSON.stringify({
+            teamId: team.id,
+            workspace: team.workspace,
+            reason: 'Stopped from Hermes WebUI',
+          }),
         });
-        await refreshState();
+        await refreshState(true);
       });
     }
 

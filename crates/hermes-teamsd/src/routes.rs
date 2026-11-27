@@ -370,7 +370,7 @@ async fn plan_approve_handler(
     Json(body): Json<TeamActionBody>,
 ) -> Result<Json<Value>, ApiError> {
     verify_request_auth(state.auth_mode(), &headers)?;
-    let ws = state.resolve_workspace(body.workspace.as_deref());
+    let ws = state.resolve_workspace_for_team(body.workspace.as_deref(), &body.team_id);
     let out = state.with_engine(&ws, |engine| engine.approve_team(&body.team_id))?;
     state.enqueue_directives(&ws, out.directives.clone());
     state.publish_event(&ws, Some(out.team.id.clone()), "team_approved");
@@ -392,7 +392,7 @@ async fn plan_edit_handler(
     Json(body): Json<WebEditPlanBody>,
 ) -> Result<Json<Value>, ApiError> {
     verify_request_auth(state.auth_mode(), &headers)?;
-    let ws = state.resolve_workspace(body.workspace.as_deref());
+    let ws = state.resolve_workspace_for_team(body.workspace.as_deref(), &body.input.team_id);
     let out = state.with_engine(&ws, |engine| engine.edit_plan(body.input))?;
     state.publish_event(&ws, Some(out.team.id.clone()), "plan_edited");
     Ok(Json(serde_json::to_value(out)?))
@@ -404,7 +404,7 @@ async fn plan_feedback_handler(
     Json(body): Json<TeamActionBody>,
 ) -> Result<Json<Value>, ApiError> {
     verify_request_auth(state.auth_mode(), &headers)?;
-    let ws = state.resolve_workspace(body.workspace.as_deref());
+    let ws = state.resolve_workspace_for_team(body.workspace.as_deref(), &body.team_id);
     let out = state.with_engine(&ws, |engine| engine.request_plan_feedback(&body.team_id))?;
     state.enqueue_directives(&ws, out.directives.clone());
     state.publish_event(&ws, Some(out.team.id.clone()), "plan_feedback");
@@ -417,7 +417,7 @@ async fn plan_discard_handler(
     Json(body): Json<TeamActionBody>,
 ) -> Result<Json<Value>, ApiError> {
     verify_request_auth(state.auth_mode(), &headers)?;
-    let ws = state.resolve_workspace(body.workspace.as_deref());
+    let ws = state.resolve_workspace_for_team(body.workspace.as_deref(), &body.team_id);
     let out = state.with_engine(&ws, |engine| engine.discard_staged_plan(&body.team_id))?;
     state.enqueue_directives(&ws, out.directives.clone());
     state.publish_event(&ws, Some(out.team.id.clone()), "plan_discarded");
@@ -430,7 +430,7 @@ async fn team_halt_handler(
     Json(body): Json<TeamActionBody>,
 ) -> Result<Json<Value>, ApiError> {
     verify_request_auth(state.auth_mode(), &headers)?;
-    let ws = state.resolve_workspace(body.workspace.as_deref());
+    let ws = state.resolve_workspace_for_team(body.workspace.as_deref(), &body.team_id);
     let out = state.with_engine(&ws, |engine| {
         engine.halt_team(&body.team_id, body.reason.as_deref())
     })?;
@@ -445,7 +445,7 @@ async fn team_resume_handler(
     Json(body): Json<TeamActionBody>,
 ) -> Result<Json<Value>, ApiError> {
     verify_request_auth(state.auth_mode(), &headers)?;
-    let ws = state.resolve_workspace(body.workspace.as_deref());
+    let ws = state.resolve_workspace_for_team(body.workspace.as_deref(), &body.team_id);
     let reason = body.reason.as_deref().unwrap_or("resumed from WebUI");
     let out = state.with_engine(&ws, |engine| engine.resume_team(&body.team_id, reason))?;
     state.enqueue_directives(&ws, out.directives.clone());
