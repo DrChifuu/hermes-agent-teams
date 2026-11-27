@@ -7,10 +7,10 @@
     "assets/artwork.js",
     "assets/dag-renderer.js",
     "assets/plan-editor.js",
-    "assets/agent-teams.js"
+    "assets/agent-teams.js?v=3"
   ],
   "stylesheets": [
-    "assets/agent-teams.css?v=2"
+    "assets/agent-teams.css?v=3"
   ],
   "sidecar": {
     "type": "loopback",

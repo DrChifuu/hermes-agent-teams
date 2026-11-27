@@ -84,6 +84,8 @@
   z-index: 960;
   display: flex;
   flex-direction: column;
+  container-type: inline-size;
+  container-name: hat-panel;
   border: 1px solid var(--hat-border);
   border-radius: 16px;
   background: var(--hat-bg);
@@ -115,13 +117,20 @@
 
 .hat-panel-head {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  flex-direction: column;
+  gap: 5px;
   padding: 10px 14px;
   border-bottom: 1px solid var(--hat-border);
   background: var(--hat-bg2);
   user-select: none;
+}
+
+.hat-head-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
 }
 
 .hat-panel.is-floating .hat-panel-head {
@@ -131,27 +140,53 @@
 .hat-head-left {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .hat-head-title {
   font-size: 14px;
   font-weight: 700;
   color: var(--hat-strong);
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .hat-head-meta {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
   font-size: 11.5px;
   color: var(--hat-muted);
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  padding-left: 30px;
+}
+
+@container hat-panel (min-width: 680px) {
+  .hat-panel-head {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .hat-head-top {
+    display: contents;
+  }
+  .hat-head-left {
+    order: 1;
+  }
+  .hat-head-meta {
+    order: 2;
+    padding-left: 0;
+    white-space: nowrap;
+  }
+  .hat-head-controls {
+    order: 3;
+  }
 }
 
 .hat-status-pill {
@@ -194,7 +229,8 @@
 .hat-head-controls {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  flex: none;
 }
 
 .hat-icon-btn {
@@ -262,14 +298,20 @@
 
 .hat-grid {
   display: grid;
-  grid-template-columns: minmax(270px, 320px) minmax(0, 1fr);
+  grid-template-columns: minmax(260px, 310px) minmax(0, 1fr);
   gap: 16px;
   align-items: start;
 }
 
-@media (max-width: 740px) {
+@container hat-panel (max-width: 680px) {
   .hat-grid {
     grid-template-columns: 1fr;
+  }
+  .hat-dag-col {
+    border-left: 0;
+    border-top: 1px solid var(--hat-border);
+    padding-left: 0;
+    padding-top: 14px;
   }
 }
 
@@ -813,9 +855,70 @@
 
 .hat-plan-task {
   display: grid;
-  grid-template-columns: 36px 1fr 110px 90px 26px;
+  grid-template-columns: 34px minmax(0, 1fr) minmax(110px, 145px) 92px 26px;
   gap: 6px;
   align-items: center;
+}
+
+@container hat-panel (max-width: 600px) {
+  .hat-plan-task {
+    grid-template-columns: 32px minmax(0, 1fr) 28px;
+    padding: 8px;
+    border-radius: 10px;
+    border: 1px solid var(--hat-border);
+    background: var(--hat-bg2);
+    gap: 6px;
+  }
+  .hat-plan-task .hat-task-badge {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .hat-plan-task .hat-input-subject {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .hat-plan-task .hat-remove-task {
+    grid-column: 3;
+    grid-row: 1;
+  }
+  .hat-plan-task .hat-select-assignee {
+    grid-column: 1 / 3;
+    grid-row: 2;
+  }
+  .hat-plan-task .hat-input-deps {
+    grid-column: 1 / 4;
+    grid-row: 3;
+  }
+}
+
+@container hat-panel (max-width: 440px) {
+  .hat-plan-member {
+    align-items: flex-start;
+  }
+  .hat-plan-row-top {
+    flex-wrap: wrap;
+  }
+  .hat-plan-row-top .hat-input {
+    flex: 1 1 110px;
+  }
+  .hat-plan-actions > button {
+    flex: 1 1 calc(50% - 6px);
+    text-align: center;
+  }
+}
+
+@media (max-width: 560px) {
+  .hat-panel {
+    top: 48px;
+    right: 6px;
+    left: 6px;
+    bottom: 6px;
+    width: auto;
+    border-radius: 12px;
+  }
+  .hat-resize-left {
+    display: none;
+  }
 }
 
 .hat-input,

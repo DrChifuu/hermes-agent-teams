@@ -293,29 +293,31 @@
     panel.innerHTML = `
       <div class="hat-resize-left" data-resize="left"></div>
       <div class="hat-panel-head" data-drag-handle="true">
-        <div class="hat-head-left">
-          <img class="hat-badge-img" src="${esc(art.LEAD_ART)}" alt="Captain Ferris" />
-          <span class="hat-head-title">${esc(team ? team.name : tr('title'))}</span>
-          ${meta ? `<span class="hat-status-pill ${meta.cls}">${esc(meta.label)}</span>` : ''}
+        <div class="hat-head-top">
+          <div class="hat-head-left">
+            <img class="hat-badge-img" src="${esc(art.LEAD_ART)}" alt="Captain Ferris" />
+            <span class="hat-head-title" title="${esc(team ? team.name : tr('title'))}">${esc(team ? team.name : tr('title'))}</span>
+            ${meta ? `<span class="hat-status-pill ${meta.cls}">${esc(meta.label)}</span>` : ''}
+          </div>
+          <div class="hat-head-controls">
+            ${
+              showStop
+                ? `<button type="button" class="hat-icon-btn is-danger" data-action="stop">${esc(
+                    uiState.stopArmed ? tr('confirmStop') : tr('stopTeam')
+                  )}</button>`
+                : ''
+            }
+            <button type="button" class="hat-icon-btn" data-action="toggle-float" title="Dock / Float">${
+              uiState.floating ? '◧' : '❐'
+            }</button>
+            <button type="button" class="hat-icon-btn" data-action="close" title="Collapse">✕</button>
+          </div>
         </div>
-        <div class="hat-head-controls">
-          ${
-            team
-              ? `<span class="hat-head-meta">${stats.memberCount} ${esc(tr('members'))} · ${stats.completed}/${stats.total} ${esc(tr('done'))} · ${stats.messageCount} ${esc(tr('messages'))}</span>`
-              : ''
-          }
-          ${
-            showStop
-              ? `<button type="button" class="hat-icon-btn is-danger" data-action="stop">${esc(
-                  uiState.stopArmed ? tr('confirmStop') : tr('stopTeam')
-                )}</button>`
-              : ''
-          }
-          <button type="button" class="hat-icon-btn" data-action="toggle-float" title="Dock / Float">${
-            uiState.floating ? '◧' : '❐'
-          }</button>
-          <button type="button" class="hat-icon-btn" data-action="close" title="Collapse">✕</button>
-        </div>
+        ${
+          team
+            ? `<div class="hat-head-meta">${stats.memberCount} ${esc(tr('members'))} · ${stats.completed}/${stats.total} ${esc(tr('done'))} · ${stats.messageCount} ${esc(tr('messages'))}</div>`
+            : ''
+        }
       </div>
       <div class="hat-tabs">
         <button type="button" class="hat-tab${uiState.tab === 'active' ? ' is-active' : ''}" data-tab="active">
