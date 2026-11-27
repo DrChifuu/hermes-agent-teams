@@ -404,7 +404,8 @@ impl TeamEngine {
 
         let mut directives = Vec::new();
         if automatic {
-            directives.extend(build_spawn_directives(&team));
+            let sched = schedule_ready_tasks(&mut team);
+            directives.extend(sched.directives);
         }
 
         self.store.save_team(&team)?;
@@ -521,15 +522,21 @@ impl TeamEngine {
         team.plan_review_state = None;
         team.approved_at = Some(now);
 
-        let mut directives = build_spawn_directives(&team);
+        // Claim ready tasks immediately so members spawn directly with their first task + attempt_id!
+        let sched = schedule_ready_tasks(&mut team);
+        let mut directives = sched.directives;
+        if team.tasks.is_empty() {
+            directives.extend(build_spawn_directives(&team));
+        }
         directives.push(EngineDirective::WakeCaptain {
             team_id: team.id.clone(),
             captain_session_id: team.captain_session_id.clone(),
             message: format!(
-                "Team '{}' approved and started with {} members and {} tasks. Monitor progress with agent_teams_status.",
+                "Team '{}' approved and started with {} members and {} tasks ({} ready tasks dispatched). Monitor progress with agent_teams_status.",
                 team.name,
                 team.members.len(),
-                team.tasks.len()
+                team.tasks.len(),
+                sched.claimed.len()
             ),
         });
 
@@ -537,9 +544,9 @@ impl TeamEngine {
 
         Ok(OperationOutput {
             summary: format!(
-                "Approved team '{}': spawning {} members.",
+                "Approved team '{}': dispatched {} ready tasks.",
                 team.id,
-                team.members.len()
+                sched.claimed.len()
             ),
             team,
             directives,
@@ -547,8 +554,8 @@ impl TeamEngine {
         })
     }
 
-    /// Register the real Hermes subagent session ID after the Python bridge spawns a member,
-    /// then immediately trigger the scheduler so that member claims its first ready task.
+    /// Register the real Hermes subagent session ID after the Python bridge spawns a member.
+    /// Preserves `Working` status if the member already owns an active claimed task.
     pub fn bind_member_session(
         &self,
         team_id: &str,
@@ -557,6 +564,10 @@ impl TeamEngine {
         spawn_error: Option<String>,
     ) -> Result<OperationOutput> {
         let mut team = self.store.load_team(team_id)?;
+        let has_active_task = team
+            .tasks
+            .iter()
+            .any(|t| t.assignee.as_deref() == Some(member_name) && t.status.is_active());
         let member = team
             .find_member_mut(member_name)
             .ok_or_else(|| TeamsError::MemberNotFound(member_name.to_string()))?;
@@ -564,6 +575,14 @@ impl TeamEngine {
         if let Some(err) = spawn_error {
             member.spawn_error = Some(err);
             member.status = MemberStatus::Idle;
+            // Release any active task back to pending if initial spawn failed.
+            for t in &mut team.tasks {
+                if t.assignee.as_deref() == Some(member_name) && t.status.is_active() {
+                    t.status = TaskStatus::Pending;
+                    t.attempt_id = None;
+                    t.updated_at = now_ms();
+                }
+            }
             self.store.save_team(&team)?;
             return Ok(OperationOutput {
                 summary: format!("Recorded spawn error for member '{member_name}'."),
@@ -575,14 +594,18 @@ impl TeamEngine {
 
         member.id = subagent_id.trim().to_string();
         member.spawn_error = None;
-        member.status = MemberStatus::Idle;
+        member.status = if has_active_task {
+            MemberStatus::Working
+        } else {
+            MemberStatus::Idle
+        };
 
         let sched = schedule_ready_tasks(&mut team);
         self.store.save_team(&team)?;
 
         Ok(OperationOutput {
             summary: format!(
-                "Bound member '{member_name}' to subagent '{subagent_id}'; dispatched {} ready tasks.",
+                "Bound member '{member_name}' to subagent '{subagent_id}'; dispatched {} additional tasks.",
                 sched.claimed.len()
             ),
             team,
@@ -627,7 +650,7 @@ impl TeamEngine {
         let directives = if team.is_staged() {
             Vec::new()
         } else {
-            vec![spawn_directive_for(&team, &member)]
+            schedule_ready_tasks(&mut team).directives
         };
 
         self.store.save_team(&team)?;
@@ -672,6 +695,7 @@ impl TeamEngine {
         if !subagent_id.is_empty() {
             directives.push(EngineDirective::CancelMember {
                 team_id: team.id.clone(),
+                captain_session_id: team.captain_session_id.clone(),
                 member_name: member_name.to_string(),
                 subagent_id,
                 reason: "member removed from team".to_string(),
@@ -819,6 +843,7 @@ impl TeamEngine {
         }
 
         let team_id_for_cancel = team.id.clone();
+        let captain_sid_for_cancel = team.captain_session_id.clone();
         let mut directives = Vec::new();
         if let Some(old_owner) = old_task.assignee.as_deref() {
             if old_owner != "captain" {
@@ -834,6 +859,7 @@ impl TeamEngine {
                     if !m.id.is_empty() && old_task.status.is_active() {
                         directives.push(EngineDirective::CancelMember {
                             team_id: team_id_for_cancel.clone(),
+                            captain_session_id: captain_sid_for_cancel.clone(),
                             member_name: m.name.clone(),
                             subagent_id: m.id.clone(),
                             reason: input
@@ -1173,15 +1199,44 @@ impl TeamEngine {
                 message: format!("[Team message from {}]: {}", msg.from, msg.content),
             });
         } else if let Some(member) = team.find_member(&msg.to) {
-            if member.status != MemberStatus::Removed && !member.id.is_empty() {
-                directives.push(EngineDirective::WakeMember {
-                    team_id: team.id.clone(),
-                    member_name: member.name.clone(),
-                    subagent_id: member.id.clone(),
-                    task_id: input.task_id,
-                    attempt_id: input.attempt_id,
-                    message: format!("[Direct message from {}]: {}", msg.from, msg.content),
-                });
+            if member.status != MemberStatus::Removed {
+                let role = member
+                    .role
+                    .clone()
+                    .unwrap_or_else(|| "teammate".to_string());
+                let body = format!("[Direct message from {}]: {}", msg.from, msg.content);
+                if member.id.is_empty() {
+                    directives.push(EngineDirective::SpawnMember {
+                        team_id: team.id.clone(),
+                        captain_session_id: team.captain_session_id.clone(),
+                        member_name: member.name.clone(),
+                        role,
+                        provider: member.provider.clone(),
+                        model: member.model.clone(),
+                        reasoning_effort: member.reasoning_effort.clone(),
+                        execution_prompt: member.execution_prompt.clone(),
+                        tool_filter: member.tool_filter.clone(),
+                        task_id: input.task_id,
+                        attempt_id: input.attempt_id,
+                        initial_prompt: body,
+                    });
+                } else {
+                    directives.push(EngineDirective::WakeMember {
+                        team_id: team.id.clone(),
+                        captain_session_id: team.captain_session_id.clone(),
+                        member_name: member.name.clone(),
+                        role,
+                        provider: member.provider.clone(),
+                        model: member.model.clone(),
+                        reasoning_effort: member.reasoning_effort.clone(),
+                        execution_prompt: member.execution_prompt.clone(),
+                        tool_filter: member.tool_filter.clone(),
+                        subagent_id: member.id.clone(),
+                        task_id: input.task_id,
+                        attempt_id: input.attempt_id,
+                        message: body,
+                    });
+                }
             }
         }
 
@@ -1263,11 +1318,13 @@ impl TeamEngine {
         team.halted_at = Some(now);
         team.halt_reason = reason.map(ToString::to_string);
 
+        let captain_sid = team.captain_session_id.clone();
         let mut directives = Vec::new();
         for member in &mut team.members {
             if member.status != MemberStatus::Removed && !member.id.is_empty() {
                 directives.push(EngineDirective::CancelMember {
                     team_id: team.id.clone(),
+                    captain_session_id: captain_sid.clone(),
                     member_name: member.name.clone(),
                     subagent_id: member.id.clone(),
                     reason: reason.unwrap_or("team halted by user").to_string(),
@@ -1333,12 +1390,14 @@ impl TeamEngine {
     ) -> Result<OperationOutput> {
         let mut team = self.store.load_team(team_id)?;
         let now = now_ms();
+        let captain_sid = team.captain_session_id.clone();
         let mut directives = Vec::new();
 
         for member in &mut team.members {
             if member.status != MemberStatus::Removed && !member.id.is_empty() {
                 directives.push(EngineDirective::CancelMember {
                     team_id: team.id.clone(),
+                    captain_session_id: captain_sid.clone(),
                     member_name: member.name.clone(),
                     subagent_id: member.id.clone(),
                     reason: reason.unwrap_or("team archived").to_string(),
@@ -1602,6 +1661,7 @@ fn spawn_directive_for(team: &TeamState, member: &TeamMember) -> EngineDirective
     );
     EngineDirective::SpawnMember {
         team_id: team.id.clone(),
+        captain_session_id: team.captain_session_id.clone(),
         member_name: member.name.clone(),
         role,
         provider: member.provider.clone(),
@@ -1609,6 +1669,8 @@ fn spawn_directive_for(team: &TeamState, member: &TeamMember) -> EngineDirective
         reasoning_effort: member.reasoning_effort.clone(),
         execution_prompt: member.execution_prompt.clone(),
         tool_filter: member.tool_filter.clone(),
+        task_id: None,
+        attempt_id: None,
         initial_prompt,
     }
 }

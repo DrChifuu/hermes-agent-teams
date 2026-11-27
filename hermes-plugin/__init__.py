@@ -93,7 +93,21 @@ def register(ctx: Any) -> None:
             payload = dict(args or {})
             workspace = _resolve_workspace(ctx)
             session_id = _resolve_session_id(ctx, kwargs)
-            actor = str(payload.pop("_actor", None) or ("member" if is_child else "captain"))
+            parent_agent = kwargs.get("parent_agent")
+
+            if not is_child and parent_agent is not None:
+                bridge.remember_captain_agent(session_id, parent_agent)
+
+            resolved_member: str | None = None
+            if is_child and parent_agent is not None:
+                child_sid = str(getattr(parent_agent, "_subagent_id", "") or "")
+                resolved_member = bridge.resolve_member_name(child_sid, workspace=workspace)
+
+            actor = str(
+                payload.pop("_actor", None)
+                or resolved_member
+                or ("member" if is_child else "captain")
+            )
 
             if tool_name == "agent_teams_create":
                 payload.setdefault("captainSessionId", session_id)

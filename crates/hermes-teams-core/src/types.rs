@@ -601,9 +601,10 @@ impl TeamState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EngineDirective {
-    /// Spawn a new durable Hermes subagent for a team member.
+    /// Spawn a new durable Hermes subagent for a team member (carrying its first claimed task if ready).
     SpawnMember {
         team_id: String,
+        captain_session_id: String,
         member_name: String,
         role: String,
         provider: Option<String>,
@@ -611,12 +612,21 @@ pub enum EngineDirective {
         reasoning_effort: Option<String>,
         execution_prompt: Option<String>,
         tool_filter: Option<MemberToolFilter>,
+        task_id: Option<String>,
+        attempt_id: Option<String>,
         initial_prompt: String,
     },
     /// Send a follow-up turn to an existing member subagent (new task or mailbox message).
     WakeMember {
         team_id: String,
+        captain_session_id: String,
         member_name: String,
+        role: String,
+        provider: Option<String>,
+        model: Option<String>,
+        reasoning_effort: Option<String>,
+        execution_prompt: Option<String>,
+        tool_filter: Option<MemberToolFilter>,
         subagent_id: String,
         task_id: Option<String>,
         attempt_id: Option<String>,
@@ -625,6 +635,7 @@ pub enum EngineDirective {
     /// Cancel/interrupt a running member subagent (reassignment, removal, halt, or archive).
     CancelMember {
         team_id: String,
+        captain_session_id: String,
         member_name: String,
         subagent_id: String,
         reason: String,

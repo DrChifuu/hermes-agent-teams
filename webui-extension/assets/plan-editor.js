@@ -51,16 +51,29 @@
         provider: m.provider || '',
         model: m.model || '',
         reasoningEffort: m.reasoningEffort || '',
+        executionPrompt: m.executionPrompt || undefined,
+        toolPolicy: m.toolPolicy || undefined,
       })),
       tasks: (team.tasks || []).map((t) => ({
         id: t.id,
         subject: t.subject,
+        description: t.description || undefined,
         assignee: t.assignee || '',
         dependencies: Array.isArray(t.dependencies) ? t.dependencies.slice() : [],
+        kind: t.kind || undefined,
+        objective: t.objective || undefined,
+        inScope: t.inScope || undefined,
+        outOfScope: t.outOfScope || undefined,
+        acceptance: t.acceptance || undefined,
+        verify: t.verify || undefined,
+        reviewedTaskId: t.reviewedTaskId || undefined,
+        coverageOf: t.coverageOf || undefined,
       })),
     };
 
     let discardArmed = false;
+    let dirty = false;
+    let busy = false;
 
     loadHermesModelCatalog().then((catalog) => {
       function paint() {
@@ -163,6 +176,7 @@
           const idx = Number(row.getAttribute('data-midx'));
           row.querySelectorAll('[data-field]').forEach((el) => {
             el.addEventListener('change', () => {
+              dirty = true;
               const f = el.getAttribute('data-field');
               if (f === 'route') {
                 const v = el.value || '';
@@ -180,6 +194,7 @@
             });
           });
           row.querySelector('.hat-remove-member').addEventListener('click', () => {
+            dirty = true;
             draft.members.splice(idx, 1);
             paint();
           });
@@ -189,6 +204,7 @@
           const idx = Number(row.getAttribute('data-tidx'));
           row.querySelectorAll('[data-field]').forEach((el) => {
             el.addEventListener('change', () => {
+              dirty = true;
               const f = el.getAttribute('data-field');
               if (f === 'dependencies') {
                 draft.tasks[idx].dependencies = el.value
@@ -201,12 +217,14 @@
             });
           });
           row.querySelector('.hat-remove-task').addEventListener('click', () => {
+            dirty = true;
             draft.tasks.splice(idx, 1);
             paint();
           });
         });
 
         container.querySelector('[data-action="add-member"]').addEventListener('click', () => {
+          dirty = true;
           draft.members.push({
             name: `member-${draft.members.length + 1}`,
             role: 'engineer',
@@ -218,6 +236,7 @@
         });
 
         container.querySelector('[data-action="add-task"]').addEventListener('click', () => {
+          dirty = true;
           draft.tasks.push({
             id: `t${draft.tasks.length + 1}`,
             subject: '',
@@ -228,12 +247,29 @@
         });
 
         container.querySelector('[data-action="save"]').addEventListener('click', async () => {
-          await opts.onSaveDraft(team.id, cleanDraft(draft));
+          if (busy) return;
+          busy = true;
+          try {
+            await opts.onSaveDraft(team.id, cleanDraft(draft));
+            dirty = false;
+          } finally {
+            busy = false;
+          }
         });
 
-        container.querySelector('[data-action="approve"]').addEventListener('click', async () => {
-          await opts.onSaveDraft(team.id, cleanDraft(draft));
-          await opts.onApprove(team.id);
+        container.querySelector('[data-action="approve"]').addEventListener('click', async (ev) => {
+          if (busy) return;
+          busy = true;
+          ev.currentTarget.disabled = true;
+          try {
+            if (dirty) {
+              await opts.onSaveDraft(team.id, cleanDraft(draft));
+              dirty = false;
+            }
+            await opts.onApprove(team.id);
+          } finally {
+            busy = false;
+          }
         });
 
         container.querySelector('[data-action="feedback"]').addEventListener('click', async () => {
@@ -265,14 +301,25 @@
           provider: m.provider.trim() || undefined,
           model: m.model.trim() || undefined,
           reasoningEffort: m.reasoningEffort.trim() || undefined,
+          executionPrompt: m.executionPrompt,
+          toolPolicy: m.toolPolicy,
         })),
       tasks: draft.tasks
         .filter((t) => t.subject && t.subject.trim())
         .map((t, i) => ({
           id: t.id || `t${i + 1}`,
           subject: t.subject.trim(),
+          description: t.description,
           assignee: t.assignee.trim() || undefined,
           dependencies: t.dependencies,
+          kind: t.kind,
+          objective: t.objective,
+          inScope: t.inScope,
+          outOfScope: t.outOfScope,
+          acceptance: t.acceptance,
+          verify: t.verify,
+          reviewedTaskId: t.reviewedTaskId,
+          coverageOf: t.coverageOf,
         })),
     };
   }

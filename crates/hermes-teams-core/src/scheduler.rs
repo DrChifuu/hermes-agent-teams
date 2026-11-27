@@ -110,12 +110,40 @@ pub fn claim_task(
     if claimer != "captain" {
         let prompt = build_task_dispatch_prompt(team, &claimed_task, &attempt_id);
         let team_id = team.id.clone();
+        let captain_session_id = team.captain_session_id.clone();
         if let Some(member) = team.find_member_mut(claimer) {
             member.status = MemberStatus::Working;
-            if !member.id.is_empty() {
+            let role = member
+                .role
+                .clone()
+                .unwrap_or_else(|| "teammate".to_string());
+            if member.id.is_empty() {
+                // Lazy spawn: launch member directly with its first claimed task & attempt_id!
+                directives.push(EngineDirective::SpawnMember {
+                    team_id,
+                    captain_session_id,
+                    member_name: member.name.clone(),
+                    role,
+                    provider: member.provider.clone(),
+                    model: member.model.clone(),
+                    reasoning_effort: member.reasoning_effort.clone(),
+                    execution_prompt: member.execution_prompt.clone(),
+                    tool_filter: member.tool_filter.clone(),
+                    task_id: Some(claimed_task.id.clone()),
+                    attempt_id: Some(attempt_id),
+                    initial_prompt: prompt,
+                });
+            } else {
                 directives.push(EngineDirective::WakeMember {
                     team_id,
+                    captain_session_id,
                     member_name: member.name.clone(),
+                    role,
+                    provider: member.provider.clone(),
+                    model: member.model.clone(),
+                    reasoning_effort: member.reasoning_effort.clone(),
+                    execution_prompt: member.execution_prompt.clone(),
+                    tool_filter: member.tool_filter.clone(),
                     subagent_id: member.id.clone(),
                     task_id: Some(claimed_task.id.clone()),
                     attempt_id: Some(attempt_id),
@@ -129,6 +157,7 @@ pub fn claim_task(
 }
 
 /// Automatically claim the next ready task for every idle, unstopped member with no open task.
+/// Unspawned members in a running team are spawned lazily carrying their first ready task.
 pub fn schedule_ready_tasks(team: &mut TeamState) -> ScheduleOutcome {
     let mut outcome = ScheduleOutcome::default();
     if team.is_staged() || team.is_halted() {
@@ -141,7 +170,6 @@ pub fn schedule_ready_tasks(team: &mut TeamState) -> ScheduleOutcome {
         .filter(|m| {
             m.status == MemberStatus::Idle
                 && !m.stopping.unwrap_or(false)
-                && !m.id.is_empty()
                 && active_task_of(team, &m.name).is_none()
         })
         .map(|m| m.name.clone())
@@ -198,17 +226,19 @@ pub fn recover_stranded_tasks(team: &mut TeamState) -> Vec<EngineDirective> {
         if assignee.is_empty() || assignee == "captain" {
             continue;
         }
-        let subagent_id = team
+        let member_info = team
             .find_member(&assignee)
             .filter(|m| m.status != MemberStatus::Removed && !m.id.is_empty())
-            .map(|m| m.id.clone());
-        let Some(sub_id) = subagent_id else {
+            .cloned();
+        let Some(member) = member_info else {
             continue;
         };
 
         let next_attempt = team.find_task(&tid).and_then(|t| t.attempt).unwrap_or(0) + 1;
         let new_attempt_id = gen_token("att-rec", u64::from(next_attempt));
 
+        let team_id = team.id.clone();
+        let captain_session_id = team.captain_session_id.clone();
         if let Some(task) = team.find_task_mut(&tid) {
             task.attempt = Some(next_attempt);
             task.attempt_id = Some(new_attempt_id.clone());
@@ -216,9 +246,16 @@ pub fn recover_stranded_tasks(team: &mut TeamState) -> Vec<EngineDirective> {
             let snapshot = task.clone();
             let prompt = build_task_dispatch_prompt(team, &snapshot, &new_attempt_id);
             directives.push(EngineDirective::WakeMember {
-                team_id: team.id.clone(),
+                team_id,
+                captain_session_id,
                 member_name: assignee,
-                subagent_id: sub_id,
+                role: member.role.unwrap_or_else(|| "teammate".to_string()),
+                provider: member.provider,
+                model: member.model,
+                reasoning_effort: member.reasoning_effort,
+                execution_prompt: member.execution_prompt,
+                tool_filter: member.tool_filter,
+                subagent_id: member.id,
                 task_id: Some(tid),
                 attempt_id: Some(new_attempt_id),
                 message: format!("[Cold recovery retry]\n{prompt}"),

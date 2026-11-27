@@ -6,8 +6,8 @@
   "scripts": [
     "assets/artwork.js",
     "assets/dag-renderer.js",
-    "assets/plan-editor.js",
-    "assets/agent-teams.js?v=3"
+    "assets/plan-editor.js?v=4",
+    "assets/agent-teams.js?v=4"
   ],
   "stylesheets": [
     "assets/agent-teams.css?v=3"

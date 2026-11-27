@@ -609,9 +609,23 @@
     extHandle.events.on('turn:complete', () => void refreshState());
   }
 
-  // Initial load + SSE + gentle safety poll every 6s when panel is open
-  refreshState().then(() => connectSse());
-  uiState.pollTimer = window.setInterval(() => {
-    if (uiState.open || !uiState.sse) void refreshState();
-  }, 6000);
+  // Initial load + adaptive polling (1.5s while a team is actively running, 6s otherwise, paused when hidden)
+  function scheduleNextPoll() {
+    if (uiState.pollTimer) window.clearTimeout(uiState.pollTimer);
+    const hasRunning = (uiState.payload.teams || []).some(
+      (t) => !t.halted && t.phase !== 'staged' && (t.stats && t.stats.completed < t.stats.total)
+    );
+    const delay = document.hidden ? 10000 : hasRunning ? 1500 : 6000;
+    uiState.pollTimer = window.setTimeout(async () => {
+      if (!document.hidden && (uiState.open || hasRunning)) {
+        await refreshState();
+      }
+      scheduleNextPoll();
+    }, delay);
+  }
+
+  refreshState().then(() => {
+    connectSse();
+    scheduleNextPoll();
+  });
 })();

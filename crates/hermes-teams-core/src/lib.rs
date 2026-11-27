@@ -162,12 +162,24 @@ mod tests {
         let err = engine.claim_task_op("harbor-stockroom", "t1", "inventory");
         assert!(matches!(err, Err(TeamsError::TeamStaged(_))));
 
-        // 2. Approve & Run emits 3 SpawnMember + 1 WakeCaptain directives
+        // 2. Approve & Run lazily spawns the 2 members with ready tasks (t1, t2) + 1 WakeCaptain
         let approved = engine.approve_team("harbor-stockroom").expect("approve");
         assert!(!approved.team.is_staged());
-        assert_eq!(approved.directives.len(), 4);
+        assert_eq!(approved.directives.len(), 3);
+        assert_eq!(
+            approved.team.find_task("t1").unwrap().status,
+            TaskStatus::Claimed
+        );
+        assert_eq!(
+            approved.team.find_task("t2").unwrap().status,
+            TaskStatus::Claimed
+        );
+        assert_eq!(
+            approved.team.find_task("t3").unwrap().status,
+            TaskStatus::Pending
+        );
 
-        // 3. Bind spawned Hermes subagents -> t1 & t2 auto-claimed, t3 waits on deps
+        // 3. Bind spawned Hermes subagents -> t1 & t2 stay claimed with attempt_ids; t3 still waits on deps
         let b1 = engine
             .bind_member_session("harbor-stockroom", "inventory", "sub-inv", None)
             .expect("bind inv");
