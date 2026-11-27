@@ -25,6 +25,10 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health_handler))
         .route("/api/v1/policies", get(policies_handler))
+        .route(
+            "/api/v1/settings",
+            get(get_settings_handler).post(post_settings_handler),
+        )
         .route("/api/v1/state", get(state_handler))
         .route("/api/v1/events", get(events_sse_handler))
         .route("/api/v1/inbox", get(inbox_handler))
@@ -53,7 +57,38 @@ async fn health_handler(State(state): State<AppState>) -> Json<Value> {
         "uptimeSecs": state.uptime_secs(),
         "authMode": format!("{:?}", state.auth_mode()),
         "policies": state.available_policy_ids(),
+        "fullAccess": state.is_full_access(),
     }))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SettingsBody {
+    full_access: bool,
+}
+
+async fn get_settings_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    verify_request_auth(state.auth_mode(), &headers)?;
+    Ok(Json(json!({
+        "ok": true,
+        "fullAccess": state.is_full_access(),
+    })))
+}
+
+async fn post_settings_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<SettingsBody>,
+) -> Result<Json<Value>, ApiError> {
+    verify_request_auth(state.auth_mode(), &headers)?;
+    state.set_full_access(body.full_access);
+    Ok(Json(json!({
+        "ok": true,
+        "fullAccess": state.is_full_access(),
+    })))
 }
 
 async fn policies_handler(
@@ -417,7 +452,15 @@ async fn dispatch_tool_handler(
 
     match tool_name.as_str() {
         "agent_teams_create" => {
-            let input: CreateTeamInput = serde_json::from_value(env.args)?;
+            let mut input: CreateTeamInput = serde_json::from_value(env.args)?;
+            if state.is_full_access() {
+                input.approval = Some("automatic".to_string());
+                for m in &mut input.members {
+                    if m.tool_policy.is_none() {
+                        m.tool_policy = Some("full".to_string());
+                    }
+                }
+            }
             let out = state.with_engine(&ws, |engine| engine.create_team(input))?;
             state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "team_created");

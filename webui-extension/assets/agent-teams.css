@@ -1495,6 +1495,35 @@
   font-weight: 600;
 }
 
+.hat-chat-dismiss {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--hat-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hat-chat-dismiss:hover {
+  background: var(--hat-hover);
+  color: var(--hat-strong);
+  border-color: var(--hat-border);
+}
+
+.hat-fullaccess-btn.is-on {
+  border-color: var(--hat-rust);
+  background: var(--hat-rust-soft);
+  color: var(--hat-rust-hi);
+  font-weight: 700;
+}
+
 @media (max-width: 640px) {
   .hat-chat-banner-main {
     flex-wrap: wrap;

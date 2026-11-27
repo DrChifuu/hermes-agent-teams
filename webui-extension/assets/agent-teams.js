@@ -58,6 +58,10 @@
       chatTeamRunning: 'Equipo activo en esta sesión',
       chatTeamDone: 'Equipo finalizado — listo para informe final',
       chatAskReport: 'Pedir informe al Capitán',
+      chatDismiss: 'Ocultar aviso',
+      fullAccessOn: 'Full Access: ON',
+      fullAccessOff: 'Full Access',
+      fullAccessTip: 'Ejecuta equipos nuevos automáticamente sin pedir aprobación manual ni bloquear herramientas',
       stagedBannerTitle: 'Plan en borrador — revisa antes de ejecutar',
       stagedBannerDesc: 'Ajusta roles, modelos de Hermes o dependencias y pulsa Aprobar y ejecutar.',
       awaitingFeedbackHint: 'Esperando tus cambios en el chat. El Capitán actualizará este mismo borrador.',
@@ -135,6 +139,10 @@
       chatTeamRunning: 'Active team in this session',
       chatTeamDone: 'Team finished — ready for final report',
       chatAskReport: 'Ask Captain for report',
+      chatDismiss: 'Dismiss banner',
+      fullAccessOn: 'Full Access: ON',
+      fullAccessOff: 'Full Access',
+      fullAccessTip: 'Auto-approve new teams and default members to full tool access without manual prompts',
       stagedBannerTitle: 'Staged Plan — Review before running',
       stagedBannerDesc: 'Adjust roles, Hermes models, or dependencies and click Approve & Run.',
       awaitingFeedbackHint: 'Waiting for your feedback in chat. Captain will revise this same draft.',
@@ -242,6 +250,8 @@
     liveMemberFilter: 'all',
     stopArmed: false,
     deleteArmed: false,
+    fullAccess: false,
+    fullAccessLoaded: false,
     editorDirty: false,
     lastSessionId: '',
     lastPayloadSig: '',
@@ -580,6 +590,39 @@
     }
   }
 
+  const DISMISSED_KEY = 'hat_dismissed_banners_v1';
+
+  function getDismissedBanners() {
+    try {
+      const raw = localStorage.getItem(DISMISSED_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return new Set(Array.isArray(arr) ? arr : []);
+    } catch (_e) {
+      return new Set();
+    }
+  }
+
+  function dismissBannerKey(key) {
+    try {
+      const set = getDismissedBanners();
+      set.add(key);
+      const list = Array.from(set).slice(-40);
+      localStorage.setItem(DISMISSED_KEY, JSON.stringify(list));
+    } catch (_e) {}
+  }
+
+  async function refreshSettings() {
+    try {
+      const data = await apiFetch('/api/v1/settings');
+      if (data && typeof data.fullAccess === 'boolean') {
+        const changed = data.fullAccess !== uiState.fullAccess || !uiState.fullAccessLoaded;
+        uiState.fullAccess = data.fullAccess;
+        uiState.fullAccessLoaded = true;
+        if (changed && uiState.open) render();
+      }
+    } catch (_e) {}
+  }
+
   function renderChatBanner() {
     if (!mountChatBanner()) {
       chatBanner.hidden = true;
@@ -599,9 +642,15 @@
       return;
     }
 
-    const art = window.HermesTeamsArtwork;
     const isStaged = target.phase === 'staged';
     const isDone = isTeamFinished(target);
+    const bannerKey = `${target.id}:${isStaged ? 'staged' : isDone ? 'done' : 'running'}`;
+    if (getDismissedBanners().has(bannerKey)) {
+      chatBanner.hidden = true;
+      return;
+    }
+
+    const art = window.HermesTeamsArtwork;
     const meta = statusMeta(target);
     const stats = target.stats || {};
     const captainRoute = resolveCaptainRoute(target);
@@ -640,6 +689,7 @@
             ? `<button type="button" class="hat-btn-primary hat-chat-banner-cta" data-action="ask-captain-report">${esc(tr('chatAskReport'))} 🦀</button>`
             : `<button type="button" class="${isStaged ? 'hat-btn-primary' : 'hat-btn-secondary'} hat-chat-banner-cta" data-action="open-chat-team">${esc(isStaged ? tr('chatReviewApprove') : tr('chatOpenTeam'))} 🦀</button>`
         }
+        <button type="button" class="hat-chat-dismiss" data-action="dismiss-chat-banner" title="${esc(tr('chatDismiss'))}" aria-label="${esc(tr('chatDismiss'))}">✕</button>
       </div>`;
 
     const openTarget = () => {
@@ -652,10 +702,20 @@
       render();
       void refreshState(true);
     };
+    const dismissBtn = chatBanner.querySelector('[data-action="dismiss-chat-banner"]');
+    if (dismissBtn) {
+      dismissBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        dismissBannerKey(bannerKey);
+        chatBanner.hidden = true;
+      });
+    }
     const reportBtn = chatBanner.querySelector('[data-action="ask-captain-report"]');
     if (reportBtn) {
       reportBtn.addEventListener('click', (ev) => {
         ev.stopPropagation();
+        dismissBannerKey(bannerKey);
+        chatBanner.hidden = true;
         triggerCaptainReport(target);
       });
     }
@@ -789,6 +849,9 @@
             ${meta ? `<span class="hat-status-pill ${meta.cls}">${esc(meta.label)}</span>` : ''}
           </div>
           <div class="hat-head-controls">
+            <button type="button" class="hat-icon-btn hat-fullaccess-btn${uiState.fullAccess ? ' is-on' : ''}" data-action="toggle-full-access" title="${esc(tr('fullAccessTip'))}">
+              ⚡ ${esc(uiState.fullAccess ? tr('fullAccessOn') : tr('fullAccessOff'))}
+            </button>
             ${
               showStop
                 ? `<button type="button" class="hat-icon-btn is-danger" data-action="stop">${esc(
@@ -1335,6 +1398,22 @@
         }
       });
     }
+    const fullAccessBtn = panel.querySelector('[data-action="toggle-full-access"]');
+    if (fullAccessBtn) {
+      fullAccessBtn.addEventListener('click', async () => {
+        const next = !uiState.fullAccess;
+        try {
+          const res = await apiFetch('/api/v1/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fullAccess: next }),
+          });
+          uiState.fullAccess = !!(res && res.fullAccess);
+          uiState.fullAccessLoaded = true;
+          render();
+        } catch (_e) {}
+      });
+    }
     const stopBtn = panel.querySelector('[data-action="stop"]');
     if (stopBtn && team) {
       stopBtn.addEventListener('click', async () => {
@@ -1439,6 +1518,7 @@
   });
 
   refreshState().then(() => {
+    void refreshSettings();
     connectSse();
     scheduleNextPoll();
   });

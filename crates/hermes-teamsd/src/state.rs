@@ -3,6 +3,7 @@ use hermes_teams_core::{EngineDirective, TeamEngine, TeamStore, TeamsConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::broadcast;
@@ -98,6 +99,8 @@ struct InnerState {
     known_workspaces: Mutex<Vec<PathBuf>>,
     /// In-memory ring buffer of live background agent activity + per-member runtime status.
     activity: Mutex<ActivityStore>,
+    /// When enabled, new teams default to `approval: "automatic"` and `toolPolicy: "full"`.
+    full_access: AtomicBool,
 }
 
 /// Thread-safe shared daemon state.
@@ -123,7 +126,60 @@ impl AppState {
             events_tx,
             known_workspaces: Mutex::new(known),
             activity: Mutex::new(ActivityStore::default()),
+            full_access: AtomicBool::new(Self::load_full_access()),
         }))
+    }
+
+    fn settings_path() -> Option<PathBuf> {
+        let home = std::env::var("HERMES_HOME")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var("HOME")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+                    .map(|h| PathBuf::from(h).join(".hermes"))
+            })?;
+        Some(home.join("agent-teams-settings.json"))
+    }
+
+    fn load_full_access() -> bool {
+        if let Ok(v) = std::env::var("HERMES_TEAMS_FULL_ACCESS") {
+            if matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes") {
+                return true;
+            }
+        }
+        if let Some(p) = Self::settings_path() {
+            if let Ok(raw) = std::fs::read_to_string(&p) {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                    if let Some(b) = v.get("fullAccess").and_then(serde_json::Value::as_bool) {
+                        return b;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    pub fn is_full_access(&self) -> bool {
+        self.0.full_access.load(Ordering::Relaxed)
+    }
+
+    pub fn set_full_access(&self, enabled: bool) {
+        self.0.full_access.store(enabled, Ordering::Relaxed);
+        if let Some(p) = Self::settings_path() {
+            if let Some(parent) = p.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let tmp = p.with_extension("json.tmp");
+            let body = serde_json::json!({ "fullAccess": enabled });
+            if let Ok(bytes) = serde_json::to_vec_pretty(&body) {
+                if std::fs::write(&tmp, bytes).is_ok() {
+                    let _ = std::fs::rename(&tmp, &p);
+                }
+            }
+        }
     }
 
     fn workspaces_registry_path() -> Option<PathBuf> {
