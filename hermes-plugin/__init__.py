@@ -101,7 +101,11 @@ def register(ctx: Any) -> None:
             resolved_member: str | None = None
             if is_child and parent_agent is not None:
                 child_sid = str(getattr(parent_agent, "_subagent_id", "") or "")
-                resolved_member = bridge.resolve_member_name(child_sid, workspace=workspace)
+                resolved_member, member_ws = bridge.resolve_member_context(
+                    child_sid, fallback_workspace=workspace
+                )
+                if member_ws:
+                    workspace = member_ws
 
             actor = str(
                 payload.pop("_actor", None)
@@ -129,7 +133,10 @@ def register(ctx: Any) -> None:
 
             res = client.dispatch_tool(tool_name, payload, workspace=workspace, actor=actor)
             directives = res.pop("directives", None)
-            if isinstance(directives, list) and directives:
+            # When the background poller is running, hermes-teamsd already enqueued all directives
+            # for single-threaded root-Captain execution. Only execute inline when auto_poll is off
+            # (e.g. unit tests or single-shot CLI runs).
+            if not auto_poll and isinstance(directives, list) and directives:
                 bridge.execute_directives(directives, workspace=workspace)
             return json.dumps(res, ensure_ascii=False)
 

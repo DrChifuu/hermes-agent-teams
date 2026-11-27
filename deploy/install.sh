@@ -91,7 +91,8 @@ if command -v systemctl >/dev/null 2>&1 && [ "$(id -u)" -eq 0 ]; then
   echo "==> Installing and starting systemd service hermes-teamsd.service..."
   install -m 0644 "$REPO_DIR/deploy/hermes-teamsd.service" /etc/systemd/system/hermes-teamsd.service
   systemctl daemon-reload
-  systemctl enable --now hermes-teamsd.service
+  systemctl enable hermes-teamsd.service
+  systemctl restart hermes-teamsd.service
   systemctl status --no-pager hermes-teamsd.service | head -n 15 || true
 else
   echo "==> Non-root or no systemd detected. Start the daemon manually with:"

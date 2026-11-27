@@ -226,12 +226,14 @@ async fn dispatch_tool_handler(
         "agent_teams_create" => {
             let input: CreateTeamInput = serde_json::from_value(env.args)?;
             let out = state.with_engine(&ws, |engine| engine.create_team(input))?;
+            state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "team_created");
             Ok(Json(serde_json::to_value(out)?))
         }
         "agent_teams_approve" => {
             let team_id = extract_str(&env.args, "teamId", "team_id")?;
             let out = state.with_engine(&ws, |engine| engine.approve_team(&team_id))?;
+            state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "team_approved");
             Ok(Json(serde_json::to_value(out)?))
         }
@@ -244,6 +246,7 @@ async fn dispatch_tool_handler(
         "agent_teams_add_member" => {
             let input: AddMemberInput = serde_json::from_value(env.args)?;
             let out = state.with_engine(&ws, |engine| engine.add_member(input))?;
+            state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "member_added");
             Ok(Json(serde_json::to_value(out)?))
         }
@@ -251,18 +254,21 @@ async fn dispatch_tool_handler(
             let team_id = extract_str(&env.args, "teamId", "team_id")?;
             let member = extract_str(&env.args, "name", "member_name")?;
             let out = state.with_engine(&ws, |engine| engine.remove_member(&team_id, &member))?;
+            state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "member_removed");
             Ok(Json(serde_json::to_value(out)?))
         }
         "agent_teams_create_task" => {
             let input: CreateTaskInput = serde_json::from_value(env.args)?;
             let out = state.with_engine(&ws, |engine| engine.create_task(input))?;
+            state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "task_created");
             Ok(Json(serde_json::to_value(out)?))
         }
         "agent_teams_reassign_task" => {
             let input: ReassignTaskInput = serde_json::from_value(env.args)?;
             let out = state.with_engine(&ws, |engine| engine.reassign_task(&input))?;
+            state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "task_reassigned");
             Ok(Json(serde_json::to_value(out)?))
         }
@@ -277,6 +283,7 @@ async fn dispatch_tool_handler(
             let out = state.with_engine(&ws, |engine| {
                 engine.claim_task_op(&team_id, &task_id, &claimer)
             })?;
+            state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "task_claimed");
             Ok(Json(serde_json::to_value(out)?))
         }
@@ -287,6 +294,7 @@ async fn dispatch_tool_handler(
             }
             let input: UpdateTaskInput = serde_json::from_value(val)?;
             let out = state.with_engine(&ws, |engine| engine.update_task(input, Some(&ws)))?;
+            state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "task_updated");
             Ok(Json(serde_json::to_value(out)?))
         }
@@ -305,6 +313,7 @@ async fn dispatch_tool_handler(
             let tid = input.team_id.clone();
             let (msg, directives) =
                 state.with_engine(&ws, |engine| engine.send_message_op(input))?;
+            state.enqueue_directives(&ws, directives.clone());
             state.publish_event(&ws, Some(tid), "message_sent");
             Ok(Json(json!({
                 "ok": true,
@@ -321,6 +330,7 @@ async fn dispatch_tool_handler(
             let team_id = extract_str(&env.args, "teamId", "team_id")?;
             let reason = extract_str(&env.args, "reason", "resumeReason")?;
             let out = state.with_engine(&ws, |engine| engine.resume_team(&team_id, &reason))?;
+            state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "team_resumed");
             Ok(Json(serde_json::to_value(out)?))
         }
@@ -334,6 +344,7 @@ async fn dispatch_tool_handler(
             let out = state.with_engine(&ws, |engine| {
                 engine.delete_and_archive(&team_id, reason.as_deref())
             })?;
+            state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "team_archived");
             Ok(Json(serde_json::to_value(out)?))
         }

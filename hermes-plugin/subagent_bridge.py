@@ -16,22 +16,22 @@ _log = logging.getLogger(__name__)
 
 @contextlib.contextmanager
 def _maybe_bind_parent(parent: Any):
-    """Bind `parent` to Hermes's active subagent contextvar when executing outside a live tool turn."""
+    """Unconditionally bind the root Captain `parent` for the duration of a subagent lifecycle call.
+
+    Must NOT skip binding when called from inside a delegated `leaf` child turn — otherwise Hermes
+    would treat the leaf child as the parent and refuse to spawn the next teammate.
+    """
     if parent is None:
         yield
         return
     try:
-        from agent.subagent_lifecycle import bind_subagent_parent, get_active_subagent_parent
-
-        if get_active_subagent_parent() is not None:
-            yield
-            return
-        with bind_subagent_parent(parent):
-            yield
-        return
+        from agent.subagent_lifecycle import bind_subagent_parent
     except Exception:  # noqa: BLE001
-        pass
-    yield
+        yield
+        return
+
+    with bind_subagent_parent(parent):
+        yield
 
 
 def _build_fallback_parent_agent(captain_session_id: str, workspace: str) -> Any | None:
@@ -58,7 +58,8 @@ class SubagentBridge:
         self.ctx = ctx
         self.client = client
         self._handles: dict[str, Any] = {}  # subagent_id -> SubagentHandle
-        self._member_lookup: dict[str, tuple[str, str]] = {}  # subagent_id -> (team_id, member_name)
+        # subagent_id -> (team_id, member_name, workspace)
+        self._member_lookup: dict[str, tuple[str, str, str]] = {}
         self._captain_agents: dict[str, Any] = {}  # captain_session_id -> AIAgent
         self._last_captain_agent: Any = None
         self._lock = threading.Lock()
@@ -78,38 +79,40 @@ class SubagentBridge:
             self._last_captain_agent = parent_agent
 
     def _get_parent_agent(self, captain_session_id: str, workspace: str) -> Any:
-        try:
-            from agent.subagent_lifecycle import get_active_subagent_parent
-
-            active = get_active_subagent_parent()
-            if active is not None:
-                return active
-        except Exception:  # noqa: BLE001
-            pass
-
+        # Prefer the stored root Captain agent (depth == 0), never a delegated leaf child!
         with self._lock:
             if captain_session_id and captain_session_id in self._captain_agents:
                 return self._captain_agents[captain_session_id]
             if self._last_captain_agent is not None:
                 return self._last_captain_agent
 
+        try:
+            from agent.subagent_lifecycle import get_active_subagent_parent
+
+            active = get_active_subagent_parent()
+            if active is not None and int(getattr(active, "_delegate_depth", 0) or 0) == 0:
+                self.remember_captain_agent(captain_session_id, active)
+                return active
+        except Exception:  # noqa: BLE001
+            pass
+
         fallback = _build_fallback_parent_agent(captain_session_id, workspace)
         if fallback is not None:
             self.remember_captain_agent(captain_session_id, fallback)
         return fallback
 
-    def resolve_member_name(self, subagent_id: str, workspace: str = "") -> str | None:
-        """Resolve exact team member name (`ejecutor`, `arquitecto-revisor`, ...) from a child's `_subagent_id`."""
+    def resolve_member_context(self, subagent_id: str, fallback_workspace: str = "") -> tuple[str | None, str | None]:
+        """Resolve `(member_name, workspace)` from a child's `_subagent_id`."""
         sid = (subagent_id or "").strip()
         if not sid:
-            return None
+            return (None, None)
         with self._lock:
             entry = self._member_lookup.get(sid)
             if entry is not None:
-                return entry[1]
+                return (entry[1], entry[2] or fallback_workspace or None)
         # Fallback: query live teams from hermes-teamsd (survives process restarts).
         try:
-            qs = f"?workspace={workspace}" if workspace else ""
+            qs = f"?workspace={fallback_workspace}" if fallback_workspace else ""
             state = self.client._request("GET", f"/api/v1/state{qs}")
             for team in state.get("teams") or []:
                 for member in team.get("members") or []:
@@ -117,11 +120,15 @@ class SubagentBridge:
                         name = str(member.get("name") or "")
                         if name:
                             with self._lock:
-                                self._member_lookup[sid] = (str(team.get("id") or ""), name)
-                            return name
+                                self._member_lookup[sid] = (
+                                    str(team.get("id") or ""),
+                                    name,
+                                    fallback_workspace,
+                                )
+                            return (name, fallback_workspace or None)
         except Exception:  # noqa: BLE001
             pass
-        return None
+        return (None, None)
 
     def start_poller(self) -> None:
         if self._poller is not None and self._poller.is_alive():
@@ -138,7 +145,7 @@ class SubagentBridge:
         self._stop_event.set()
 
     def _poll_loop(self) -> None:
-        while not self._stop_event.wait(1.0):
+        while not self._stop_event.wait(0.5):
             try:
                 queued = self.client.poll_directives()
                 for item in queued:
@@ -178,13 +185,14 @@ class SubagentBridge:
         goal_prompt: str,
         workspace: str,
     ) -> tuple[str, str | None]:
-        blocked_tools = tuple((tool_filter or {}).get("deny") or ())
         context_parts = [
             MEMBER_INSTRUCTIONS,
             f"Team ID: {team_id}",
             f"Your member name: {member_name}",
             f"Role: {role}",
         ]
+        if workspace:
+            context_parts.append(f"Workspace directory: {workspace}")
         if execution_prompt:
             context_parts.append(f"Execution instructions:\n{execution_prompt}")
         full_context = "\n\n".join(context_parts)
@@ -196,16 +204,19 @@ class SubagentBridge:
         try:
             lifecycle = getattr(self.ctx, "subagent_lifecycle", None)
             if lifecycle is not None:
+                # Comply strictly with Hermes SubagentLaunchRequest validation:
+                # - role must be 'leaf' or 'orchestrator'
+                # - working_directory and blocked_tools must remain omitted/empty
                 req: dict[str, Any] = {
                     "goal": goal_prompt,
                     "context": full_context,
-                    "role": role,
-                    "working_directory": workspace or None,
-                    "blocked_tools": blocked_tools,
+                    "role": "leaf",
                     "metadata": {
                         "hermes_agent_teams": True,
                         "team_id": team_id,
                         "member_name": member_name,
+                        "team_role": role,
+                        "workspace": workspace,
                     },
                 }
                 if model:
@@ -220,7 +231,7 @@ class SubagentBridge:
                 if subagent_id:
                     with self._lock:
                         self._handles[subagent_id] = handle
-                        self._member_lookup[subagent_id] = (team_id, member_name)
+                        self._member_lookup[subagent_id] = (team_id, member_name, workspace)
                     _log.info(
                         "Spawned Hermes subagent %s for team=%s member=%s (%s/%s)",
                         subagent_id,
