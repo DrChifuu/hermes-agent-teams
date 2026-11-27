@@ -332,6 +332,24 @@ pub fn maybe_spawn_repair_loop(team: &mut TeamState, failed_review_id: &str) -> 
 
     team.tasks.push(repair_task);
     team.tasks.push(next_review_task);
+
+    // 3) Rewire any downstream pending tasks that depended on `failed_review_id`
+    //    so they now wait on `next_review_id` instead of deadlocking on the failed review.
+    for task in &mut team.tasks {
+        if task.status == TaskStatus::Pending
+            && task.id != repair_id
+            && task.id != next_review_id
+            && task.dependencies.iter().any(|d| d == failed_review_id)
+        {
+            for dep in &mut task.dependencies {
+                if dep == failed_review_id {
+                    dep.clone_from(&next_review_id);
+                }
+            }
+            task.updated_at = now;
+        }
+    }
+
     vec![repair_id, next_review_id]
 }
 

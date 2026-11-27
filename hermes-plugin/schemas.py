@@ -192,10 +192,49 @@ TOOL_SCHEMAS: dict[str, dict] = {
                 },
                 "output": {"type": "string"},
                 "verdict": {"type": "string", "enum": ["pass", "needs_revision", "reject"]},
-                "findings": {"type": "array", "items": {"type": "object"}},
+                "findings": {
+                    "type": "array",
+                    "description": "Required when closing a review task with status='failed' and verdict='needs_revision'|'reject'.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "severity": {"type": "string", "enum": ["low", "medium", "high", "blocker"]},
+                            "file": {"type": "string"},
+                            "line": {"type": "integer"},
+                            "problem": {"type": "string"},
+                            "requiredFix": {"type": "string"},
+                            "resolved": {"type": "boolean"},
+                        },
+                        "required": ["id", "severity", "problem", "requiredFix"],
+                    },
+                },
                 "changedPaths": {"type": "array", "items": {"type": "string"}},
-                "acceptanceResults": {"type": "array", "items": {"type": "object"}},
-                "commandsRun": {"type": "array", "items": {"type": "object"}},
+                "acceptanceResults": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "criterion": {"type": "string"},
+                            "status": {"type": "string", "enum": ["passed", "failed"]},
+                            "evidence": {"type": "string"},
+                        },
+                        "required": ["criterion", "status"],
+                    },
+                },
+                "commandsRun": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "command": {"type": "string"},
+                            "status": {"type": "string", "enum": ["passed", "failed"]},
+                            "exitCode": {"type": "integer"},
+                            "evidence": {"type": "string"},
+                        },
+                        "required": ["command", "status"],
+                    },
+                },
             },
             "required": ["teamId", "taskId", "status"],
         },

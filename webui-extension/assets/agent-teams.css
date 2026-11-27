@@ -1484,6 +1484,17 @@
   font-style: italic;
 }
 
+.hat-escalated-banner {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--hat-red);
+  background: var(--hat-red-soft);
+  color: var(--hat-red);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
 @media (max-width: 640px) {
   .hat-chat-banner-main {
     flex-wrap: wrap;

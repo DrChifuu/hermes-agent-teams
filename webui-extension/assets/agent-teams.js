@@ -31,6 +31,7 @@
       delivered: 'Entregadas',
       failed: 'Fallidas',
       allDelivered: 'Todas las tareas han sido entregadas',
+      escalatedBanner: 'Escalado al Capitán — se alcanzó el límite de rondas de revisión. Requiere intervención.',
       members: 'miembros',
       messages: 'mensajes',
       done: 'completadas',
@@ -105,6 +106,7 @@
       delivered: 'Delivered',
       failed: 'Failed',
       allDelivered: 'All tasks delivered',
+      escalatedBanner: 'Escalated to Captain — review round limit reached. Requires intervention.',
       members: 'members',
       messages: 'messages',
       done: 'done',
@@ -945,6 +947,7 @@
               ${stats.failed ? `<span class="hat-legend-item"><i class="hat-dot dot-failed"></i>${esc(tr('failed'))} ${stats.failed}</span>` : ''}
             </div>
             ${allDone ? `<div class="hat-all-done-banner">● ${esc(tr('allDelivered'))}</div>` : ''}
+            ${team.escalated ? `<div class="hat-escalated-banner" role="alert">⚠ ${esc(tr('escalatedBanner'))}</div>` : ''}
           </div>
 
           <div class="hat-members-header">

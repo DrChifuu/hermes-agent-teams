@@ -27,6 +27,30 @@ if command -v hermes >/dev/null 2>&1; then
   hermes plugins enable hermes-agent-teams || true
 fi
 
+# Ensure Hermes allows hermes-agent-teams to wake the Captain via inject_message
+CFG_YAML="$HERMES_HOME/config.yaml"
+if [ -f "$CFG_YAML" ]; then
+  python3 - "$CFG_YAML" <<'PY'
+import sys
+from pathlib import Path
+
+p = Path(sys.argv[1])
+txt = p.read_text(encoding="utf-8")
+if "allow_gateway_injection" not in txt and "entries:" in txt:
+    out = []
+    inserted = False
+    for line in txt.splitlines(keepends=True):
+        out.append(line)
+        if not inserted and line.strip() == "entries:":
+            indent = line[:len(line) - len(line.lstrip())]
+            out.append(f"{indent}  hermes-agent-teams:\n")
+            out.append(f"{indent}    allow_gateway_injection: true\n")
+            inserted = True
+    if inserted:
+        p.write_text("".join(out), encoding="utf-8")
+PY
+fi
+
 echo "==> [4/4] Installing official Hermes WebUI extension to $WEBUI_EXT_DST..."
 mkdir -p "$WEBUI_EXT_ROOT"
 rm -rf "$WEBUI_EXT_DST"

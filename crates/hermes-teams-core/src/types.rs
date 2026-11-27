@@ -172,13 +172,16 @@ pub enum FindingSeverity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewFinding {
+    #[serde(default)]
     pub id: String,
     pub severity: FindingSeverity,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<u32>,
+    #[serde(alias = "description")]
     pub problem: String,
+    #[serde(alias = "fix")]
     pub required_fix: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved: Option<bool>,
@@ -198,19 +201,41 @@ pub struct AcceptanceResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandResult {
+    #[serde(alias = "cmd")]
     pub command: String,
     pub status: CheckOutcome,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "output")]
     pub evidence: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CheckOutcome {
+    #[serde(alias = "pass", alias = "ok")]
     Passed,
+    #[serde(alias = "fail", alias = "error")]
     Failed,
+}
+
+/// Deserialize an optional millisecond timestamp that may be stored as an integer or float (e.g. JS `stat.mtimeMs`).
+fn deserialize_opt_u64_lenient<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let val: Option<serde_json::Value> = Option::deserialize(deserializer)?;
+    if let Some(serde_json::Value::Number(n)) = val {
+        if let Some(u) = n.as_u64() {
+            return Ok(Some(u));
+        }
+        if let Some(f) = n.as_f64() {
+            if f.is_finite() && f >= 0.0 {
+                return Ok(Some(f as u64));
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// Digest of one workspace path at a single instant.
@@ -223,7 +248,11 @@ pub struct ArtifactDigest {
     pub sha256: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_opt_u64_lenient"
+    )]
     pub mtime_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unreadable: Option<bool>,
