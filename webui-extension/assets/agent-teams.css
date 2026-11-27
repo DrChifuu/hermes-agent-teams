@@ -3,7 +3,7 @@
    so Light, Dark, and custom Skins match seamlessly. */
 
 :root {
-  --hat-panel-width: 780px;
+  --hat-panel-width: 860px;
   --hat-rust: #f74c00;
   --hat-rust-hi: #ff6b2b;
   --hat-rust-soft: rgba(247, 76, 0, 0.16);
@@ -321,7 +321,7 @@
 
 .hat-grid {
   display: grid;
-  grid-template-columns: minmax(260px, 310px) minmax(0, 1fr);
+  grid-template-columns: minmax(240px, 285px) minmax(0, 1fr);
   gap: 16px;
   align-items: start;
 }
@@ -811,8 +811,11 @@
   border: 1px solid var(--hat-border);
   font-size: 12px;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   max-height: 140px;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 /* Staged Plan Editor */

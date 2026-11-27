@@ -223,6 +223,13 @@
       uiState.sse.close();
       uiState.sse = null;
     }
+    // Hermes WebUI's sidecar proxy buffers standard REST responses and does not
+    // stream long-lived SSE connections (returning 502 on idle timeout). Use SSE
+    // only on direct loopback access; through the WebUI proxy, adaptive polling
+    // + turn lifecycle hooks keep state live with zero proxy errors.
+    if (uiState.apiBase !== DIRECT_BASE) {
+      return;
+    }
     try {
       const url = `${uiState.apiBase}/api/v1/events`;
       const es = new EventSource(url, { withCredentials: true });
