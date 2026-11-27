@@ -367,7 +367,27 @@ async fn dispatch_tool_handler(
     Json(env): Json<ToolEnvelope>,
 ) -> Result<Json<Value>, ApiError> {
     verify_request_auth(state.auth_mode(), &headers)?;
-    let ws = state.resolve_workspace(env.workspace.as_deref());
+    let mut ws = state.resolve_workspace(env.workspace.as_deref());
+    // For tools targeting an existing teamId, if the passed workspace (e.g. default /root
+    // from a deferred tool_call) does not contain that team, locate the workspace owning it.
+    if tool_name != "agent_teams_create" {
+        if let Some(tid) = env
+            .args
+            .get("teamId")
+            .or_else(|| env.args.get("team_id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let probe = state.with_engine(&ws, |engine| {
+                engine.store().team_file(tid).is_file()
+                    || engine.store().archive_dir(tid).join("team.json").is_file()
+            });
+            if !probe {
+                ws = state.resolve_workspace_for_team(None, tid);
+            }
+        }
+    }
     let actor = env
         .actor
         .as_deref()

@@ -99,13 +99,35 @@ def register(ctx: Any) -> None:
                 bridge.remember_captain_agent(session_id, parent_agent)
 
             resolved_member: str | None = None
-            if is_child and parent_agent is not None:
-                child_sid = str(getattr(parent_agent, "_subagent_id", "") or "")
+            task_id_kw = str(kwargs.get("task_id") or "")
+            child_sid = str(getattr(parent_agent, "_subagent_id", "") or "") if parent_agent is not None else ""
+
+            # Deferred `tool_call` invocations pass `task_id` / `session_id` without `parent_agent`.
+            # Resolve member identity and workspace from SubagentBridge across all available IDs.
+            tracked = bridge.lookup_member_by_ids(
+                subagent_id=child_sid,
+                session_id=session_id,
+                task_id=task_id_kw,
+            )
+            if tracked is not None:
+                _tid, resolved_member, member_ws, _sub_id, _tfilter = tracked
+                if member_ws:
+                    workspace = member_ws
+                is_child = True
+            elif is_child and (child_sid or task_id_kw):
                 resolved_member, member_ws = bridge.resolve_member_context(
-                    child_sid, fallback_workspace=workspace
+                    child_sid or task_id_kw, fallback_workspace=workspace
                 )
                 if member_ws:
                     workspace = member_ws
+
+            if is_child and tool_name not in MEMBER_TOOL_SET:
+                return json.dumps(
+                    {
+                        "ok": False,
+                        "error": f"Tool '{tool_name}' is captain-only and cannot be invoked by a team member.",
+                    }
+                )
 
             actor = str(
                 payload.pop("_actor", None)
