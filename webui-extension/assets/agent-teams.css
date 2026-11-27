@@ -1552,6 +1552,19 @@
   font-weight: 700;
 }
 
+.hat-timer {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--hat-text);
+}
+
+.hat-timer.is-live {
+  color: var(--hat-rust-hi);
+}
+
 @media (max-width: 640px) {
   .hat-chat-banner-main {
     flex-wrap: wrap;

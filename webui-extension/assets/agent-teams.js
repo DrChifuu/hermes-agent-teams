@@ -214,6 +214,31 @@
     }
   }
 
+  function formatDuration(ms) {
+    const totalSec = Math.max(0, Math.floor((ms || 0) / 1000));
+    const hrs = Math.floor(totalSec / 3600);
+    const mins = Math.floor((totalSec % 3600) / 60);
+    const secs = totalSec % 60;
+    const pad = (n) => String(n).padStart(2, '0');
+    if (hrs > 0) return `${hrs}h ${pad(mins)}m ${pad(secs)}s`;
+    if (mins > 0) return `${mins}m ${pad(secs)}s`;
+    return `${secs}s`;
+  }
+
+  function computeTeamElapsedMs(team) {
+    if (!team || team.phase === 'staged') return 0;
+    const start = team.approvedAt || team.createdAt || 0;
+    if (!start) return 0;
+    const active = !team.archived && !team.halted && !isTeamFinished(team);
+    if (active) return Math.max(0, Date.now() - start);
+    const taskMax = (team.tasks || []).reduce(
+      (mx, t) => Math.max(mx, Number(t.updatedAt || 0)),
+      0
+    );
+    const end = Math.max(start, taskMax || start);
+    return Math.max(0, end - start);
+  }
+
   function formatRelative(ms) {
     if (!ms) return '';
     const diff = Math.max(0, Math.floor((Date.now() - ms) / 1000));
@@ -789,7 +814,7 @@
             <span class="hat-chat-banner-title">${esc(titleText)}</span>
             <span class="hat-chat-banner-name">${esc(target.name)}</span>
             <span class="hat-status-pill ${meta.cls}">${esc(meta.label)}</span>
-            <span class="hat-chat-banner-tasks">${stats.completed || 0}/${stats.total || (target.tasks || []).length} ${esc(tr('tasks'))}</span>
+            <span class="hat-chat-banner-tasks">${stats.completed || 0}/${stats.total || (target.tasks || []).length} ${esc(tr('tasks'))}${!isStaged ? ` · <span class="hat-timer" data-hat-timer-team="${esc(target.id)}">⏱ ${esc(formatDuration(computeTeamElapsedMs(target)))}</span>` : ''}</span>
           </div>
           <div class="hat-chat-banner-models">${modelChips}</div>
         </div>
@@ -1006,7 +1031,11 @@
         <div class="hat-head-subrow">
           ${
             team
-              ? `<div class="hat-head-meta">${stats.memberCount} ${esc(tr('members'))} · ${stats.completed}/${stats.total} ${esc(tr('done'))} · ${stats.messageCount} ${esc(tr('messages'))}</div>`
+              ? `<div class="hat-head-meta">${stats.memberCount} ${esc(tr('members'))} · ${stats.completed}/${stats.total} ${esc(tr('done'))} · ${stats.messageCount} ${esc(tr('messages'))}${
+                  team.phase !== 'staged'
+                    ? ` · <span class="hat-timer${!team.archived && !team.halted && !isTeamFinished(team) ? ' is-live' : ''}" data-hat-timer-team="${esc(team.id)}">⏱ ${esc(formatDuration(computeTeamElapsedMs(team)))}</span>`
+                    : ''
+                }</div>`
               : '<div class="hat-head-meta"></div>'
           }
           <div class="hat-head-controls">
@@ -1417,7 +1446,13 @@
             </div>
             <div class="hat-live-card-foot">
               <span>${toolCount} ${esc(tr('liveTools'))} · ${m.completedTasks}/${m.totalTasks} ${esc(tr('done'))}</span>
-              ${updated ? `<span>${esc(formatRelative(updated))}</span>` : ''}
+              ${
+                rt && rt.startedAt
+                  ? `<span class="hat-timer${effectiveState === 'running' ? ' is-live' : ''}"${effectiveState === 'running' ? ` data-hat-timer-start="${esc(rt.startedAt)}"` : ''}>⏱ ${esc(formatDuration((effectiveState === 'running' ? Date.now() : (rt.updatedAt || Date.now())) - rt.startedAt))}</span>`
+                  : updated
+                    ? `<span>${esc(formatRelative(updated))}</span>`
+                    : ''
+              }
             </div>
           </div>`;
       }),
@@ -1583,6 +1618,25 @@
       window.setTimeout(() => void refreshState(true), 250);
     }
   });
+
+  // Lightweight 1s timer tick (updates only textContent of timer spans — zero re-renders or scroll jumps)
+  window.setInterval(() => {
+    if (document.hidden) return;
+    const allTeams = (uiState.payload.teams || []).concat(uiState.payload.archived || []);
+    document.querySelectorAll('[data-hat-timer-team]').forEach((el) => {
+      const tid = el.getAttribute('data-hat-timer-team');
+      const t = allTeams.find((x) => x.id === tid);
+      if (t && !t.archived && !t.halted && t.phase !== 'staged' && !isTeamFinished(t)) {
+        el.textContent = `⏱ ${formatDuration(computeTeamElapsedMs(t))}`;
+      }
+    });
+    document.querySelectorAll('[data-hat-timer-start]').forEach((el) => {
+      const start = Number(el.getAttribute('data-hat-timer-start') || 0);
+      if (start > 0) {
+        el.textContent = `⏱ ${formatDuration(Date.now() - start)}`;
+      }
+    });
+  }, 1000);
 
   refreshState().then(() => {
     void refreshSettings();
