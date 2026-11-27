@@ -902,6 +902,8 @@
               <div class="hat-captain-title">
                 <span>${esc(tr('captain'))}</span>
                 <span class="hat-member-role">${esc(tr('captainSub'))}</span>
+              </div>
+              <div class="hat-captain-model-row">
                 ${
                   captainRoute
                     ? `<span class="hat-model-pill hat-captain-model" title="${esc(captainRoute)}">${esc(window.HermesTeamsDag.shortModel(captainRoute))}</span>`
