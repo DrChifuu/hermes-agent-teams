@@ -1,0 +1,46 @@
+manifest_version: 2
+name: hermes-agent-teams
+version: "0.1.0"
+description: >-
+  DSH Agent Teams ported natively to Hermes Agent & Hermes WebUI. Turns any
+  Hermes session into a Captain that plans, spawns durable subagent teammates,
+  schedules a dependency-aware task DAG, coordinates via P2P mailboxes, and
+  enforces quality gates — powered by the lightweight Rust hermes-teamsd daemon.
+author: DrChifuu
+license: MIT
+homepage: https://github.com/DrChifuu/hermes-agent-teams
+tags: [agent-teams, multi-agent, dag, rust, ferris, orchestration]
+requires_hermes: ">=0.21.0"
+provides_tools:
+  - agent_teams_create
+  - agent_teams_approve
+  - agent_teams_edit_plan
+  - agent_teams_add_member
+  - agent_teams_remove_member
+  - agent_teams_create_task
+  - agent_teams_reassign_task
+  - agent_teams_claim_task
+  - agent_teams_update_task
+  - agent_teams_amend_task
+  - agent_teams_send_message
+  - agent_teams_status
+  - agent_teams_resume
+  - agent_teams_delete
+provides_hooks:
+  - pre_llm_call
+config_schema:
+  sidecar_url:
+    type: str
+    default: "http://127.0.0.1:17890"
+    label: Sidecar URL
+    description: Loopback URL of the Rust hermes-teamsd daemon.
+  auth_mode:
+    type: str
+    default: "legacy"
+    label: Sidecar Auth Mode
+    description: "Use 'legacy' behind reverse-proxy auth (Caddy forward_auth) or 'token-v1' when HERMES_WEBUI_PASSWORD is enabled."
+  auto_poll_directives:
+    type: bool
+    default: true
+    label: Auto-poll WebUI directives
+    description: Poll hermes-teamsd for WebUI Approve/Discard/Stop actions so they trigger native Hermes subagents.

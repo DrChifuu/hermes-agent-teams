@@ -1,0 +1,56 @@
+{
+  "id": "hermes-agent-teams",
+  "name": "Hermes Agent Teams (Ferris)",
+  "version": "0.1.0",
+  "description": "DSH Agent Teams visual workspace ported natively to Hermes WebUI with Ferris Rust-crab worker mascots, interactive task DAG, staged plan editor, and Rust sidecar SSE streaming.",
+  "scripts": [
+    "assets/artwork.js",
+    "assets/dag-renderer.js",
+    "assets/plan-editor.js",
+    "assets/agent-teams.js"
+  ],
+  "stylesheets": [
+    "assets/agent-teams.css"
+  ],
+  "sidecar": {
+    "type": "loopback",
+    "origin": "http://127.0.0.1:17890",
+    "health_path": "/health",
+    "proxy_auth": "legacy"
+  },
+  "permissions": {
+    "storage": {
+      "owned": true
+    }
+  },
+  "settings_schema": [
+    {
+      "key": "auto_open_panel",
+      "type": "boolean",
+      "label": "Auto-open panel when a team is active",
+      "description": "Automatically expand the Agent Teams workspace panel when the active chat owns a team.",
+      "default": true
+    },
+    {
+      "key": "default_mode",
+      "type": "enum",
+      "label": "Default panel layout",
+      "options": [
+        { "value": "docked", "label": "Docked (right side)" },
+        { "value": "floating", "label": "Floating window" }
+      ],
+      "default": "docked"
+    },
+    {
+      "key": "language",
+      "type": "enum",
+      "label": "Panel language",
+      "options": [
+        { "value": "auto", "label": "Auto (browser / Hermes)" },
+        { "value": "es", "label": "Español" },
+        { "value": "en", "label": "English" }
+      ],
+      "default": "auto"
+    }
+  ]
+}

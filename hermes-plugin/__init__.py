@@ -1,0 +1,176 @@
+"""Hermes Agent native plugin for DSH Agent Teams (backed by Rust hermes-teamsd)."""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from typing import Any
+
+from .client import TeamsDaemonClient
+from .prompts import CAPTAIN_PROTOCOL_SECTION, MAX_PROMPT_CHARS, slash_activation_directive
+from .schemas import MEMBER_TOOL_SET, TOOL_SCHEMAS
+from .subagent_bridge import SubagentBridge
+
+_log = logging.getLogger(__name__)
+PLUGIN_NAME = "hermes-agent-teams"
+
+
+def _resolve_workspace(ctx: Any) -> str:
+    try:
+        cwd = ctx.session_cwd()
+        if isinstance(cwd, str) and cwd.strip():
+            return cwd.strip()
+    except Exception:  # noqa: BLE001
+        pass
+    return os.getcwd()
+
+
+def _resolve_session_id(ctx: Any, kwargs: dict[str, Any]) -> str:
+    for key in ("session_id", "sessionId"):
+        val = kwargs.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    parent = kwargs.get("parent_agent")
+    if parent is not None:
+        for attr in ("session_id", "id"):
+            val = getattr(parent, attr, None)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    try:
+        origin = ctx.turn_origin()
+        if isinstance(origin, str) and origin.strip():
+            return origin.strip()
+    except Exception:  # noqa: BLE001
+        pass
+    return "hermes-default-session"
+
+
+def _resolve_captain_route(kwargs: dict[str, Any]) -> tuple[str | None, str | None, str | None]:
+    parent = kwargs.get("parent_agent")
+    if parent is None:
+        return (None, None, None)
+    provider = getattr(parent, "provider", None) or getattr(parent, "api_provider", None)
+    model = getattr(parent, "model", None)
+    effort = getattr(parent, "reasoning_effort", None)
+    return (
+        str(provider) if provider else None,
+        str(model) if model else None,
+        str(effort) if effort else None,
+    )
+
+
+def register(ctx: Any) -> None:
+    """Entry point invoked automatically by Hermes Agent's plugin loader."""
+    sidecar_url = str(
+        ctx.get_config("sidecar_url", os.environ.get("HERMES_TEAMS_URL", "http://127.0.0.1:17890"))
+        or "http://127.0.0.1:17890"
+    )
+    auto_poll = bool(ctx.get_config("auto_poll_directives", True))
+
+    client = TeamsDaemonClient(base_url=sidecar_url)
+    bridge = SubagentBridge(ctx, client)
+    if auto_poll:
+        bridge.start_poller()
+
+    def make_handler(tool_name: str):
+        def _handler(args: dict[str, Any], **kwargs: Any) -> str:
+            is_child = False
+            try:
+                is_child = bool(ctx.in_delegated_child())
+            except Exception:  # noqa: BLE001
+                is_child = False
+
+            if is_child and tool_name not in MEMBER_TOOL_SET:
+                return json.dumps(
+                    {
+                        "ok": False,
+                        "error": f"Tool '{tool_name}' is captain-only and cannot be invoked by a team member.",
+                    }
+                )
+
+            payload = dict(args or {})
+            workspace = _resolve_workspace(ctx)
+            session_id = _resolve_session_id(ctx, kwargs)
+            actor = str(payload.pop("_actor", None) or ("member" if is_child else "captain"))
+
+            if tool_name == "agent_teams_create":
+                payload.setdefault("captainSessionId", session_id)
+                cap_provider, cap_model, cap_effort = _resolve_captain_route(kwargs)
+                if cap_provider:
+                    payload.setdefault("captainProvider", cap_provider)
+                if cap_model:
+                    payload.setdefault("captainModel", cap_model)
+                if cap_effort:
+                    payload.setdefault("captainReasoningEffort", cap_effort)
+            elif tool_name in {"agent_teams_add_member", "agent_teams_edit_plan"}:
+                cap_provider, cap_model, cap_effort = _resolve_captain_route(kwargs)
+                if cap_provider:
+                    payload.setdefault("captainProvider", cap_provider)
+                if cap_model:
+                    payload.setdefault("captainModel", cap_model)
+                if cap_effort:
+                    payload.setdefault("captainReasoningEffort", cap_effort)
+
+            res = client.dispatch_tool(tool_name, payload, workspace=workspace, actor=actor)
+            directives = res.pop("directives", None)
+            if isinstance(directives, list) and directives:
+                bridge.execute_directives(directives, workspace=workspace)
+            return json.dumps(res, ensure_ascii=False)
+
+        return _handler
+
+    for name, schema in TOOL_SCHEMAS.items():
+        ctx.register_tool(
+            name=name,
+            toolset="agent_teams",
+            schema=schema,
+            handler=make_handler(name),
+            description=schema.get("description", ""),
+            emoji="🦀",
+        )
+
+    # Register `/agent-teams` slash command natively inside Hermes CLI & WebUI.
+    def _slash_agent_teams(raw_args: str, **_kwargs: Any) -> str:
+        goal = (raw_args or "").strip()
+        if not goal:
+            return (
+                "Usage: `/agent-teams <goal>`\n"
+                "Example: `/agent-teams implement auth module, write tests, and perform security review`"
+            )
+        return slash_activation_directive(goal)
+
+    ctx.register_command(
+        "agent-teams",
+        _slash_agent_teams,
+        description="Assemble a coordinated multi-agent Ferris team with DAG tasks and live panel",
+        args_hint="<goal>",
+        argument_mode="text",
+    )
+
+    # Inject concise fixed Captain protocol section without rewriting prompts per turn.
+    if callable(getattr(ctx, "register_system_prompt_section", None)):
+        ctx.register_system_prompt_section(
+            PLUGIN_NAME,
+            CAPTAIN_PROTOCOL_SECTION,
+            max_chars=MAX_PROMPT_CHARS,
+        )
+
+    # Gesture boundary: plain-text `/agent-teams <goal>` on surfaces without command adjudication.
+    def _pre_llm_call(event: dict[str, Any] | None = None, **_kwargs: Any) -> dict[str, Any] | None:
+        if not isinstance(event, dict):
+            return None
+        user_text = str(event.get("user_message") or event.get("last_user_message") or "").strip()
+        if user_text.startswith("/agent-teams "):
+            goal = user_text[len("/agent-teams ") :].strip()
+            if goal:
+                return {"context": slash_activation_directive(goal)}
+        return None
+
+    if callable(getattr(ctx, "register_hook", None)):
+        ctx.register_hook("pre_llm_call", _pre_llm_call)
+
+    if callable(getattr(ctx, "on_unload", None)):
+        ctx.on_unload(bridge.stop)
+
+    _log.info("Registered %s plugin (%d tools, sidecar=%s)", PLUGIN_NAME, len(TOOL_SCHEMAS), sidecar_url)

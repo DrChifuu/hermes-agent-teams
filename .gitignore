@@ -1,0 +1,11 @@
+/target
+**/*.rs.bk
+*.pdb
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.DS_Store
+.env
+*.token
+.agent-teams/

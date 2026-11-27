@@ -1,0 +1,916 @@
+/* Hermes Agent Teams — DSH visual layout + Ferris Rust-crab mascots.
+   Inherits Hermes WebUI theme tokens (--bg, --surface, --text, --border, --accent)
+   so Light, Dark, and custom Skins match seamlessly. */
+
+:root {
+  --hat-panel-width: 780px;
+  --hat-rust: #f74c00;
+  --hat-rust-soft: rgba(247, 76, 0, 0.14);
+  --hat-green: #22a06b;
+  --hat-green-soft: rgba(34, 160, 107, 0.14);
+  --hat-blue: #2563eb;
+  --hat-blue-soft: rgba(37, 99, 235, 0.14);
+  --hat-amber: #d97706;
+  --hat-amber-soft: rgba(217, 119, 6, 0.16);
+  --hat-red: #dc2626;
+  --hat-red-soft: rgba(220, 38, 38, 0.14);
+  --hat-bg: var(--surface, #ffffff);
+  --hat-bg2: var(--surface2, #f7f8fa);
+  --hat-text: var(--text, #1f2328);
+  --hat-muted: var(--muted, #656d76);
+  --hat-border: var(--border, rgba(31, 35, 40, 0.14));
+  --hat-shadow: 0 14px 40px rgba(0, 0, 0, 0.18), 0 2px 10px rgba(0, 0, 0, 0.08);
+}
+
+/* Floating Ferris launcher pill */
+.hat-badge {
+  position: fixed;
+  top: 58px;
+  right: 18px;
+  z-index: 950;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 13px 0 8px;
+  border: 1px solid var(--hat-border);
+  border-radius: 999px;
+  background: var(--hat-bg);
+  color: var(--hat-text);
+  box-shadow: var(--hat-shadow);
+  font: 600 12.5px/1 var(--font-ui, system-ui, sans-serif);
+  cursor: pointer;
+  transition: transform 120ms ease, border-color 150ms ease;
+}
+
+.hat-badge:hover {
+  border-color: var(--hat-rust);
+  transform: translateY(-1px);
+}
+
+.hat-badge-img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+
+.hat-badge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--hat-muted);
+}
+
+.hat-badge-dot.is-busy {
+  background: var(--hat-rust);
+  animation: hatPulse 1.3s ease-in-out infinite;
+}
+
+/* Main workspace panel */
+.hat-panel {
+  position: fixed;
+  top: 52px;
+  right: 14px;
+  bottom: 14px;
+  width: min(var(--hat-panel-width), calc(100vw - 28px));
+  z-index: 960;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--hat-border);
+  border-radius: 16px;
+  background: var(--hat-bg);
+  color: var(--hat-text);
+  box-shadow: var(--hat-shadow);
+  overflow: hidden;
+  font-family: var(--font-ui, system-ui, sans-serif);
+}
+
+.hat-panel.is-floating {
+  bottom: auto;
+  max-height: calc(100vh - 76px);
+  min-height: 380px;
+}
+
+.hat-panel[hidden] {
+  display: none !important;
+}
+
+.hat-resize-left {
+  position: absolute;
+  top: 48px;
+  bottom: 12px;
+  left: 0;
+  width: 8px;
+  cursor: ew-resize;
+  z-index: 10;
+}
+
+.hat-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--hat-border);
+  background: var(--hat-bg2);
+  user-select: none;
+}
+
+.hat-panel.is-floating .hat-panel-head {
+  cursor: grab;
+}
+
+.hat-head-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.hat-head-title {
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hat-head-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--hat-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.hat-status-pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--hat-bg);
+  border: 1px solid var(--hat-border);
+  color: var(--hat-muted);
+}
+
+.hat-status-pill.is-running {
+  background: var(--hat-blue-soft);
+  border-color: var(--hat-blue);
+  color: var(--hat-blue);
+}
+
+.hat-status-pill.is-staged {
+  background: var(--hat-rust-soft);
+  border-color: var(--hat-rust);
+  color: var(--hat-rust);
+}
+
+.hat-status-pill.is-done {
+  background: var(--hat-green-soft);
+  border-color: var(--hat-green);
+  color: var(--hat-green);
+}
+
+.hat-status-pill.is-halted {
+  background: var(--hat-red-soft);
+  border-color: var(--hat-red);
+  color: var(--hat-red);
+}
+
+.hat-head-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hat-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  min-width: 28px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--hat-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.hat-icon-btn:hover {
+  background: var(--hat-bg);
+  border-color: var(--hat-border);
+  color: var(--hat-text);
+}
+
+.hat-icon-btn.is-danger {
+  color: var(--hat-red);
+}
+
+.hat-icon-btn.is-danger:hover {
+  background: var(--hat-red-soft);
+  border-color: var(--hat-red);
+}
+
+/* Tabs row (Active vs Archived) */
+.hat-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px 0;
+  border-bottom: 1px solid var(--hat-border);
+}
+
+.hat-tab {
+  padding: 6px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--hat-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.hat-tab.is-active {
+  color: var(--hat-rust);
+  border-bottom-color: var(--hat-rust);
+}
+
+/* Body 2-column layout (matches DSH harbor-stockroom screenshot!) */
+.hat-body {
+  flex: 1;
+  overflow: auto;
+  padding: 14px;
+}
+
+.hat-grid {
+  display: grid;
+  grid-template-columns: minmax(270px, 320px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 740px) {
+  .hat-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Captain card */
+.hat-captain-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  border: 1px solid var(--hat-border);
+  border-radius: 12px;
+  background: var(--hat-bg2);
+}
+
+.hat-avatar-wrap {
+  position: relative;
+  flex: none;
+  width: 48px;
+  height: 48px;
+}
+
+.hat-avatar-wrap.has-unread::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 2px solid var(--hat-rust);
+  animation: hatPulse 1.6s ease-in-out infinite;
+}
+
+.hat-avatar {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+}
+
+.hat-avatar.is-working {
+  animation: hatFloat 1.8s ease-in-out infinite;
+}
+
+.hat-avatar.is-idle {
+  animation: hatBreathe 3.2s ease-in-out infinite;
+}
+
+.hat-action-chip {
+  position: absolute;
+  right: -5px;
+  bottom: -4px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--hat-bg);
+  border: 1px solid var(--hat-border);
+  padding: 1px;
+  object-fit: contain;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.14);
+}
+
+.hat-captain-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.hat-captain-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+.hat-captain-sub {
+  font-size: 11.5px;
+  color: var(--hat-muted);
+  margin-top: 2px;
+}
+
+/* Segmented progress bar */
+.hat-progress-block {
+  margin-top: 12px;
+}
+
+.hat-progress-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--hat-muted);
+  margin-bottom: 6px;
+}
+
+.hat-seg-bar {
+  display: flex;
+  gap: 3px;
+  height: 6px;
+}
+
+.hat-seg {
+  flex: 1;
+  border-radius: 999px;
+  background: var(--hat-border);
+}
+
+.hat-seg.status-completed { background: var(--hat-green); }
+.hat-seg.status-in_progress,
+.hat-seg.status-claimed { background: var(--hat-blue); }
+.hat-seg.status-waiting { background: var(--hat-amber); }
+.hat-seg.status-failed { background: var(--hat-red); }
+
+.hat-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 7px;
+  font-size: 11px;
+  color: var(--hat-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.hat-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.hat-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--hat-muted);
+}
+
+.dot-completed { background: var(--hat-green); }
+.dot-in_progress, .dot-claimed { background: var(--hat-blue); }
+.dot-waiting { background: var(--hat-amber); }
+.dot-failed { background: var(--hat-red); }
+.dot-pending { background: var(--hat-muted); }
+
+.hat-all-done-banner {
+  margin-top: 10px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--hat-green-soft);
+  color: var(--hat-green);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Member delegation tree */
+.hat-members-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 14px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--hat-text);
+}
+
+.hat-members-tree {
+  position: relative;
+  margin-top: 8px;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hat-members-tree::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 4px;
+  bottom: 16px;
+  width: 1.5px;
+  background: color-mix(in srgb, var(--hat-blue) 35%, var(--hat-border));
+}
+
+.hat-member-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 11px;
+  border: 1px solid transparent;
+  background: var(--hat-bg2);
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.hat-member-row::before {
+  content: '';
+  position: absolute;
+  left: -10px;
+  top: 24px;
+  width: 10px;
+  height: 1.5px;
+  background: color-mix(in srgb, var(--hat-blue) 35%, var(--hat-border));
+}
+
+.hat-member-row:hover {
+  border-color: var(--hat-rust);
+}
+
+.hat-member-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.hat-member-top {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.hat-member-name {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.hat-member-role {
+  font-size: 11.5px;
+  color: var(--hat-muted);
+}
+
+.hat-model-pill {
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--hat-bg);
+  border: 1px solid var(--hat-border);
+  color: var(--hat-muted);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hat-member-state {
+  font-size: 11.5px;
+  color: var(--hat-muted);
+  margin-top: 2px;
+}
+
+.hat-member-tasks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
+
+.hat-task-chip {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--hat-border);
+  background: var(--hat-bg);
+  color: var(--hat-text);
+  cursor: pointer;
+}
+
+.hat-task-chip.status-completed {
+  background: var(--hat-green);
+  border-color: var(--hat-green);
+  color: #fff;
+}
+
+.hat-task-chip.status-in_progress,
+.hat-task-chip.status-claimed {
+  background: var(--hat-blue);
+  border-color: var(--hat-blue);
+  color: #fff;
+}
+
+.hat-task-chip.status-failed {
+  background: var(--hat-red);
+  border-color: var(--hat-red);
+  color: #fff;
+}
+
+.hat-member-ratio {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--hat-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Right column: Interactive SVG Task DAG */
+.hat-dag-col {
+  min-width: 0;
+  border-left: 1px solid var(--hat-border);
+  padding-left: 16px;
+}
+
+@media (max-width: 740px) {
+  .hat-dag-col {
+    border-left: 0;
+    border-top: 1px solid var(--hat-border);
+    padding-left: 0;
+    padding-top: 14px;
+  }
+}
+
+.hat-dag-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.hat-dag-title {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.hat-dag-hint {
+  font-size: 11px;
+  color: var(--hat-muted);
+}
+
+.hat-dag-scroll {
+  overflow: auto;
+  border: 1px solid var(--hat-border);
+  border-radius: 12px;
+  background: var(--hat-bg2);
+  max-height: 360px;
+}
+
+.hat-dag-canvas {
+  position: relative;
+}
+
+.hat-dag-svg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.hat-dag-edge {
+  fill: none;
+  stroke: var(--hat-border);
+  stroke-width: 1.75;
+  transition: stroke 140ms ease, opacity 140ms ease, stroke-width 140ms ease;
+}
+
+.hat-dag-edge.is-hi {
+  stroke: var(--hat-rust);
+  stroke-width: 2.4;
+}
+
+.hat-dag-edge.is-dim {
+  opacity: 0.22;
+}
+
+.hat-dag-node {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 11px;
+  border: 1.5px solid var(--hat-border);
+  background: var(--hat-bg);
+  color: var(--hat-text);
+  cursor: pointer;
+  transition: border-color 140ms ease, box-shadow 140ms ease, opacity 140ms ease, transform 120ms ease;
+}
+
+.hat-dag-node.status-completed {
+  border-color: color-mix(in srgb, var(--hat-green) 60%, var(--hat-border));
+}
+
+.hat-dag-node.status-in_progress,
+.hat-dag-node.status-claimed {
+  border-color: var(--hat-blue);
+  box-shadow: 0 0 0 2px var(--hat-blue-soft);
+}
+
+.hat-dag-node.status-failed {
+  border-color: var(--hat-red);
+}
+
+.hat-dag-node.is-selected,
+.hat-dag-node:hover {
+  border-color: var(--hat-rust);
+  transform: translateY(-1px);
+}
+
+.hat-dag-node.is-dim {
+  opacity: 0.35;
+}
+
+.hat-dag-node-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.hat-dag-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 700;
+}
+
+.hat-dag-assignee {
+  color: var(--hat-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hat-dag-subject {
+  font-size: 12px;
+  line-height: 1.35;
+  margin-top: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.hat-dag-model {
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--hat-blue);
+  font-weight: 600;
+}
+
+/* Selected Task Inspector card (bottom right, exact match to screenshot) */
+.hat-task-detail {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--hat-border);
+  background: var(--hat-bg2);
+}
+
+.hat-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.hat-detail-id {
+  color: var(--hat-blue);
+}
+
+.hat-detail-meta {
+  font-size: 11.5px;
+  color: var(--hat-muted);
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hat-detail-output {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--hat-bg);
+  border: 1px solid var(--hat-border);
+  font-size: 12px;
+  white-space: pre-wrap;
+  max-height: 140px;
+  overflow: auto;
+}
+
+/* Staged Plan Editor */
+.hat-plan-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.hat-plan-banner {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--hat-rust-soft);
+  border: 1px solid color-mix(in srgb, var(--hat-rust) 40%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+}
+
+.hat-plan-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.hat-plan-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hat-plan-member {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px solid var(--hat-border);
+  background: var(--hat-bg2);
+}
+
+.hat-plan-avatar {
+  width: 38px;
+  height: 38px;
+  object-fit: contain;
+}
+
+.hat-plan-member-fields {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hat-plan-row-top {
+  display: flex;
+  gap: 6px;
+}
+
+.hat-plan-task {
+  display: grid;
+  grid-template-columns: 36px 1fr 110px 90px 26px;
+  gap: 6px;
+  align-items: center;
+}
+
+.hat-input,
+.hat-select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--hat-border);
+  background: var(--hat-bg);
+  color: var(--hat-text);
+  font-size: 12px;
+}
+
+.hat-task-badge {
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  color: var(--hat-rust);
+}
+
+.hat-plan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 6px;
+}
+
+.hat-btn-primary,
+.hat-btn-secondary,
+.hat-btn-danger,
+.hat-btn-ghost,
+.hat-btn-icon {
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 7px 12px;
+  border: 1px solid transparent;
+}
+
+.hat-btn-primary {
+  background: var(--hat-rust);
+  color: #fff;
+}
+
+.hat-btn-primary:hover {
+  filter: brightness(1.06);
+}
+
+.hat-btn-secondary {
+  background: var(--hat-bg2);
+  border-color: var(--hat-border);
+  color: var(--hat-text);
+}
+
+.hat-btn-danger {
+  background: var(--hat-red-soft);
+  border-color: var(--hat-red);
+  color: var(--hat-red);
+}
+
+.hat-btn-ghost {
+  background: transparent;
+  color: var(--hat-rust);
+  padding: 3px 8px;
+}
+
+.hat-btn-icon {
+  background: transparent;
+  color: var(--hat-muted);
+  padding: 3px 6px;
+}
+
+.hat-empty-state,
+.hat-empty-dag {
+  padding: 28px 18px;
+  text-align: center;
+  color: var(--hat-muted);
+  font-size: 12.5px;
+}
+
+.hat-empty-state img {
+  width: 72px;
+  height: 72px;
+  margin-bottom: 10px;
+}
+
+@keyframes hatPulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+
+@keyframes hatFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+
+@keyframes hatBreathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.03); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hat-badge-dot.is-busy,
+  .hat-avatar-wrap.has-unread::after,
+  .hat-avatar.is-working,
+  .hat-avatar.is-idle {
+    animation: none !important;
+  }
+}
