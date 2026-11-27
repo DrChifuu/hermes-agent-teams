@@ -736,9 +736,15 @@
   }
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && uiState.selectedTaskId) {
-      uiState.selectedTaskId = null;
-      render();
+    if (e.key === 'Escape') {
+      if (uiState.selectedTaskId) {
+        uiState.selectedTaskId = null;
+        render();
+      } else if (uiState.open) {
+        uiState.open = false;
+        uiState._userClosed = true;
+        render();
+      }
     }
   });
 
@@ -848,6 +854,19 @@
             <span class="hat-head-title" title="${esc(team ? team.name : tr('title'))}">${esc(team ? team.name : tr('title'))}</span>
             ${meta ? `<span class="hat-status-pill ${meta.cls}">${esc(meta.label)}</span>` : ''}
           </div>
+          <div class="hat-head-win-controls">
+            <button type="button" class="hat-icon-btn" data-action="toggle-float" title="Dock / Float" aria-label="Dock / Float">${
+              uiState.floating ? '◧' : '❐'
+            }</button>
+            <button type="button" class="hat-icon-btn hat-close-btn" data-action="close" title="Collapse" aria-label="Close panel">✕</button>
+          </div>
+        </div>
+        <div class="hat-head-subrow">
+          ${
+            team
+              ? `<div class="hat-head-meta">${stats.memberCount} ${esc(tr('members'))} · ${stats.completed}/${stats.total} ${esc(tr('done'))} · ${stats.messageCount} ${esc(tr('messages'))}</div>`
+              : '<div class="hat-head-meta"></div>'
+          }
           <div class="hat-head-controls">
             <button type="button" class="hat-icon-btn hat-fullaccess-btn${uiState.fullAccess ? ' is-on' : ''}" data-action="toggle-full-access" title="${esc(tr('fullAccessTip'))}">
               ⚡ ${esc(uiState.fullAccess ? tr('fullAccessOn') : tr('fullAccessOff'))}
@@ -866,17 +885,8 @@
                   )}</button>`
                 : ''
             }
-            <button type="button" class="hat-icon-btn" data-action="toggle-float" title="Dock / Float">${
-              uiState.floating ? '◧' : '❐'
-            }</button>
-            <button type="button" class="hat-icon-btn" data-action="close" title="Collapse">✕</button>
           </div>
         </div>
-        ${
-          team
-            ? `<div class="hat-head-meta">${stats.memberCount} ${esc(tr('members'))} · ${stats.completed}/${stats.total} ${esc(tr('done'))} · ${stats.messageCount} ${esc(tr('messages'))}</div>`
-            : ''
-        }
       </div>
       <div class="hat-tabs">
         <button type="button" class="hat-tab${uiState.tab === 'active' ? ' is-active' : ''}" data-tab="active">

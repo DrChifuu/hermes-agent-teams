@@ -34,7 +34,7 @@
   position: fixed;
   top: 58px;
   right: 18px;
-  z-index: 950;
+  z-index: 2050;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -81,7 +81,7 @@
   right: 14px;
   bottom: 14px;
   width: min(var(--hat-panel-width), calc(100vw - 28px));
-  z-index: 960;
+  z-index: 2100;
   display: flex;
   flex-direction: column;
   container-type: inline-size;
@@ -166,26 +166,47 @@
   padding-left: 30px;
 }
 
-@container hat-panel (min-width: 680px) {
+.hat-head-win-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 2;
+}
+
+.hat-head-subrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.hat-head-controls {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.hat-close-btn {
+  color: var(--hat-strong);
+}
+
+@container hat-panel (max-width: 520px) {
   .hat-panel-head {
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-  }
-  .hat-head-top {
-    display: contents;
-  }
-  .hat-head-left {
-    order: 1;
+    padding: 8px 10px;
   }
   .hat-head-meta {
-    order: 2;
     padding-left: 0;
-    white-space: nowrap;
   }
-  .hat-head-controls {
-    order: 3;
+  .hat-icon-btn {
+    min-width: 32px;
+    height: 30px;
+    padding: 0 7px;
   }
 }
 
@@ -224,13 +245,6 @@
   background: var(--hat-red-soft);
   border-color: var(--hat-red);
   color: var(--hat-red);
-}
-
-.hat-head-controls {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex: none;
 }
 
 .hat-icon-btn {
