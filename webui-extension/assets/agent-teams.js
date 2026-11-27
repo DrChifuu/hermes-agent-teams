@@ -5,8 +5,17 @@
   window.__HERMES_AGENT_TEAMS_MOUNTED__ = true;
 
   const EXT_ID = 'hermes-agent-teams';
-  const PROXY_BASE = `api/extensions/${EXT_ID}/sidecar`;
   const DIRECT_BASE = 'http://127.0.0.1:17890';
+
+  function getAppBasePath() {
+    // Strip `/session/<id>` suffix while preserving any reverse-proxy subpath like `/hermes/`.
+    const path = (window.location.pathname || '/').replace(/\/session\/[^/?#]+.*$/, '');
+    return path.endsWith('/') ? path : `${path}/`;
+  }
+
+  function getProxyBase() {
+    return `${getAppBasePath()}api/extensions/${EXT_ID}/sidecar`;
+  }
 
   const STRINGS = {
     es: {
@@ -213,9 +222,10 @@
     liveMemberFilter: 'all',
     stopArmed: false,
     editorDirty: false,
+    lastSessionId: '',
     lastPayloadSig: '',
     lastActivitySig: '',
-    apiBase: PROXY_BASE,
+    apiBase: 'proxy',
     payload: { teams: [], archived: [] },
     activity: { teamId: '', members: [], events: [] },
     captainRoutes: {}, // sessionId -> { provider, model, fetched }
@@ -224,7 +234,26 @@
   };
 
   function detectCurrentSessionId() {
-    const match = window.location.pathname.match(/\/session\/([^/?#]+)/);
+    try {
+      // `S` in Hermes WebUI static/ui.js is a top-level `const S`, which lives in global lexical
+      // scope rather than on `window.S`, so check bare `S` first.
+      const globalS = typeof S !== 'undefined' ? S : window.S;
+      if (globalS && globalS.session && globalS.session.session_id) {
+        return String(globalS.session.session_id).trim();
+      }
+    } catch (_e) {}
+    try {
+      if (typeof _sessionIdFromLocation === 'function') {
+        const locSid = _sessionIdFromLocation();
+        if (locSid && String(locSid).trim()) return String(locSid).trim();
+      }
+    } catch (_e) {}
+    try {
+      const sp = new URLSearchParams(window.location.search || '');
+      const fromQuery = sp.get('session') || sp.get('session_id');
+      if (fromQuery && fromQuery.trim()) return fromQuery.trim();
+    } catch (_e) {}
+    const match = (window.location.pathname || '').match(/\/session\/([^/?#]+)/);
     if (match && match[1]) return decodeURIComponent(match[1]);
     const activeRow = document.querySelector('.session-item.active[data-session-id], [data-active-session-id]');
     if (activeRow) {
@@ -234,13 +263,14 @@
   }
 
   async function apiFetch(path, options) {
-    const bases = uiState.apiBase === PROXY_BASE ? [PROXY_BASE, DIRECT_BASE] : [DIRECT_BASE, PROXY_BASE];
+    const proxyBase = getProxyBase();
+    const bases = uiState.apiBase === 'direct' ? [DIRECT_BASE, proxyBase] : [proxyBase, DIRECT_BASE];
     let lastErr = null;
     for (const base of bases) {
       try {
         const res = await fetch(`${base}${path}`, Object.assign({ credentials: 'same-origin' }, options));
         if (res.ok) {
-          uiState.apiBase = base;
+          uiState.apiBase = base === DIRECT_BASE ? 'direct' : 'proxy';
           return await res.json();
         }
         if (res.status === 403 || res.status === 404) {
@@ -264,7 +294,7 @@
     uiState.captainRoutes[sid] = { provider: '', model: '', fetched: false };
     try {
       const res = await fetch(
-        `/api/session?session_id=${encodeURIComponent(sid)}&messages=0&resolve_model=1`,
+        `${getAppBasePath()}api/session?session_id=${encodeURIComponent(sid)}&messages=0&resolve_model=1`,
         { credentials: 'same-origin' }
       );
       if (!res.ok) return;
@@ -302,7 +332,7 @@
     try {
       const params = new URLSearchParams({ team_id: team.id });
       if (team.workspace) params.set('workspace', team.workspace);
-      if (team.archived) params.set('archived', '1');
+      if (team.archived) params.set('archived', 'true');
       const data = await apiFetch(`/api/v1/activity?${params.toString()}`);
       const nextAct = {
         teamId: team.id,
@@ -325,11 +355,16 @@
   async function refreshState(forceRender) {
     try {
       const sid = detectCurrentSessionId();
-      const qs = sid ? `?session_id=${encodeURIComponent(sid)}` : '';
-      let data = await apiFetch(`/api/v1/state${qs}`);
-      if (sid && (!data.teams || !data.teams.length) && (!data.archived || !data.archived.length)) {
-        data = await apiFetch('/api/v1/state');
+      if (sid && sid !== uiState.lastSessionId) {
+        uiState.lastSessionId = sid;
+        uiState.selectedTeamId = null;
+        uiState.selectedTaskId = null;
+        uiState.editorDirty = false;
+        forceRender = true;
       }
+      // Fetch workspace-wide state so staged/running teams created in another session (e.g. Sol)
+      // are always visible in the panel & team switcher, while auto-selecting the active session's team.
+      const data = await apiFetch('/api/v1/state');
       const nextPayload = data || { teams: [], archived: [] };
       const nextSig = JSON.stringify(nextPayload);
       const changed = nextSig !== uiState.lastPayloadSig;
@@ -376,11 +411,11 @@
       uiState.sse.close();
       uiState.sse = null;
     }
-    if (uiState.apiBase !== DIRECT_BASE) {
+    if (uiState.apiBase !== 'direct') {
       return;
     }
     try {
-      const url = `${uiState.apiBase}/api/v1/events`;
+      const url = `${DIRECT_BASE}/api/v1/events`;
       const es = new EventSource(url, { withCredentials: true });
       es.addEventListener('team_update', () => {
         void refreshState();
@@ -447,6 +482,20 @@
     if (uiState.selectedTeamId) {
       const found = list.find((t) => t.id === uiState.selectedTeamId);
       if (found) return found;
+    }
+    if (uiState.tab !== 'archive') {
+      const sid = detectCurrentSessionId();
+      if (sid) {
+        const ownActive = list.find((t) => t.captainSessionId === sid && !t.halted);
+        if (ownActive) return ownActive;
+      }
+      // Prefer an active/staged (non-halted) team over a halted one when auto-selecting.
+      const nonHalted = list.find((t) => !t.halted);
+      if (nonHalted) return nonHalted;
+      if (sid) {
+        const ownAny = list.find((t) => t.captainSessionId === sid);
+        if (ownAny) return ownAny;
+      }
     }
     return list[0];
   }
@@ -551,7 +600,7 @@
                 ${switcherList
                   .map(
                     (t) =>
-                      `<option value="${esc(t.id)}"${team && t.id === team.id ? ' selected' : ''}>${esc(t.name)} (${(t.stats && t.stats.completed) || 0}/${(t.stats && t.stats.total) || 0})</option>`
+                      `<option value="${esc(t.id)}"${team && t.id === team.id ? ' selected' : ''}>${esc(t.name)} · ${esc(statusMeta(t).label)} (${(t.stats && t.stats.completed) || 0}/${(t.stats && t.stats.total) || 0})</option>`
                   )
                   .join('')}
               </select>`
@@ -1089,21 +1138,31 @@
     extHandle.events.on('turn:complete', () => void refreshState());
   }
 
-  // Initial load + adaptive polling (1.5s while running or viewing Live tab, 6s otherwise)
+  // Initial load + adaptive polling:
+  // Always keep syncing while tab is visible so staged plans created in another tab/session
+  // or session switches via sidebar appear automatically even when the panel starts collapsed.
   function scheduleNextPoll() {
     if (uiState.pollTimer) window.clearTimeout(uiState.pollTimer);
     const hasRunning = (uiState.payload.teams || []).some(
       (t) => !t.halted && t.phase !== 'staged' && (t.stats && t.stats.completed < t.stats.total)
     );
     const fast = hasRunning || (uiState.open && uiState.tab === 'live');
-    const delay = document.hidden ? 10000 : fast ? 1500 : 6000;
+    const delay = document.hidden ? 10000 : fast ? 1500 : uiState.open ? 4000 : 3000;
     uiState.pollTimer = window.setTimeout(async () => {
-      if (!document.hidden && (uiState.open || hasRunning)) {
+      if (!document.hidden) {
         await refreshState();
       }
       scheduleNextPoll();
     }, delay);
   }
+
+  // React quickly when user switches chat sessions inside the Hermes SPA
+  window.addEventListener('popstate', () => void refreshState(true));
+  document.addEventListener('click', (ev) => {
+    if (ev.target && ev.target.closest && ev.target.closest('.session-item, [data-session-id]')) {
+      window.setTimeout(() => void refreshState(true), 250);
+    }
+  });
 
   refreshState().then(() => {
     connectSse();

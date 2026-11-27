@@ -166,7 +166,7 @@ struct ActivityQuery {
     workspace: Option<String>,
     team_id: String,
     #[serde(default)]
-    archived: Option<bool>,
+    archived: Option<String>,
 }
 
 async fn get_activity_handler(
@@ -177,10 +177,14 @@ async fn get_activity_handler(
     verify_request_auth(state.auth_mode(), &headers)?;
     let ws = state.resolve_workspace_for_team(q.workspace.as_deref(), &q.team_id);
     let (runtime_members, mut events) = state.get_team_activity(&q.team_id);
+    let is_archived = matches!(
+        q.archived.as_deref().map(str::trim),
+        Some("1" | "true" | "yes")
+    );
 
     // Also include durable mailbox messages from disk so the Live tab always shows P2P traffic.
     let mailbox_msgs = state.with_engine(&ws, |engine| {
-        let dir = if q.archived.unwrap_or(false) {
+        let dir = if is_archived {
             engine.store().archive_dir(&q.team_id)
         } else {
             let active = engine.store().team_dir(&q.team_id);
