@@ -1565,6 +1565,94 @@
   color: var(--hat-rust-hi);
 }
 
+/* Archive manager list */
+.hat-archive-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hat-archive-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.hat-archive-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hat-archive-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--hat-border);
+  background: var(--hat-bg2);
+}
+
+.hat-archive-row:hover {
+  border-color: var(--hat-border2);
+}
+
+.hat-archive-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.hat-archive-row-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.hat-archive-name {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--hat-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hat-archive-date {
+  font-size: 11px;
+  color: var(--hat-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.hat-archive-meta {
+  font-size: 11px;
+  color: var(--hat-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.hat-archive-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.hat-archive-btn {
+  padding: 4px 10px;
+  font-size: 11.5px;
+}
+
+.hat-archive-backbar {
+  margin-bottom: 8px;
+}
+
 @media (max-width: 640px) {
   .hat-chat-banner-main {
     flex-wrap: wrap;

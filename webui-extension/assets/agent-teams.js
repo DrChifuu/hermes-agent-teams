@@ -62,6 +62,13 @@
       fullAccessOn: 'Full Access: ON',
       fullAccessOff: 'Full Access',
       fullAccessTip: 'Ejecuta equipos nuevos automáticamente sin pedir aprobación manual ni bloquear herramientas',
+      archiveListTitle: 'Equipos archivados',
+      archiveEmpty: 'No hay equipos en el archivo.',
+      archiveInspect: 'Ver',
+      archiveBack: '← Volver a la lista',
+      archiveClearAll: 'Vaciar todo',
+      archiveConfirmClearAll: '¿Borrar todos?',
+      archiveConfirmOne: '¿Borrar?',
       stagedBannerTitle: 'Plan en borrador — revisa antes de ejecutar',
       stagedBannerDesc: 'Ajusta roles, modelos de Hermes o dependencias y pulsa Aprobar y ejecutar.',
       awaitingFeedbackHint: 'Esperando tus cambios en el chat. El Capitán actualizará este mismo borrador.',
@@ -143,6 +150,13 @@
       fullAccessOn: 'Full Access: ON',
       fullAccessOff: 'Full Access',
       fullAccessTip: 'Auto-approve new teams and default members to full tool access without manual prompts',
+      archiveListTitle: 'Archived teams',
+      archiveEmpty: 'No archived teams.',
+      archiveInspect: 'Inspect',
+      archiveBack: '← Back to list',
+      archiveClearAll: 'Clear all',
+      archiveConfirmClearAll: 'Delete all?',
+      archiveConfirmOne: 'Delete?',
       stagedBannerTitle: 'Staged Plan — Review before running',
       stagedBannerDesc: 'Adjust roles, Hermes models, or dependencies and click Approve & Run.',
       awaitingFeedbackHint: 'Waiting for your feedback in chat. Captain will revise this same draft.',
@@ -276,6 +290,8 @@
     liveMemberFilter: 'all',
     stopArmed: false,
     deleteArmed: false,
+    archiveDeleteArmedId: null,
+    archiveClearAllArmed: false,
     fullAccess: false,
     fullAccessLoaded: false,
     editorDirty: false,
@@ -584,6 +600,8 @@
       uiState.editorDirty = false;
       uiState.stopArmed = false;
       uiState.deleteArmed = false;
+      uiState.archiveDeleteArmedId = null;
+      uiState.archiveClearAllArmed = false;
       render();
       if (uiState.tab === 'archive') {
         void refreshState(true, { includeArchived: true });
@@ -594,6 +612,67 @@
     }
 
     const action = btn.getAttribute('data-action');
+    if (action === 'archive-inspect') {
+      ev.stopPropagation();
+      uiState.selectedTeamId = btn.getAttribute('data-team-id') || null;
+      uiState.selectedTaskId = null;
+      uiState.archiveDeleteArmedId = null;
+      uiState.archiveClearAllArmed = false;
+      render();
+      return;
+    }
+    if (action === 'archive-back') {
+      ev.stopPropagation();
+      uiState.selectedTeamId = null;
+      uiState.selectedTaskId = null;
+      uiState.deleteArmed = false;
+      render();
+      return;
+    }
+    if (action === 'archive-delete-one') {
+      ev.stopPropagation();
+      const tid = btn.getAttribute('data-team-id') || '';
+      const ws = btn.getAttribute('data-workspace') || '';
+      if (!tid) return;
+      if (uiState.archiveDeleteArmedId !== tid) {
+        uiState.archiveDeleteArmedId = tid;
+        uiState.archiveClearAllArmed = false;
+        render();
+        return;
+      }
+      uiState.archiveDeleteArmedId = null;
+      await apiFetch('/api/v1/team/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ teamId: tid, workspace: ws || undefined, archived: true }),
+      });
+      await refreshState(true, { includeArchived: true });
+      return;
+    }
+    if (action === 'archive-clear-all') {
+      ev.stopPropagation();
+      const archivedList = uiState.payload.archived || [];
+      if (!archivedList.length) return;
+      if (!uiState.archiveClearAllArmed) {
+        uiState.archiveClearAllArmed = true;
+        uiState.archiveDeleteArmedId = null;
+        render();
+        return;
+      }
+      uiState.archiveClearAllArmed = false;
+      for (const t of archivedList) {
+        try {
+          await apiFetch('/api/v1/team/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ teamId: t.id, workspace: t.workspace || undefined, archived: true }),
+          });
+        } catch (_e) {}
+      }
+      uiState.selectedTeamId = null;
+      await refreshState(true, { includeArchived: true });
+      return;
+    }
     if (action === 'close') {
       ev.stopPropagation();
       uiState.open = false;
@@ -1096,6 +1175,12 @@
       return;
     }
 
+    if (uiState.tab === 'archive' && !uiState.selectedTeamId) {
+      renderArchiveList(body, archivedTeams);
+      restoreScroll();
+      return;
+    }
+
     if (!team) {
       body.innerHTML = `
         <div class="hat-empty-state">
@@ -1154,8 +1239,71 @@
       return;
     }
 
+    if (uiState.tab === 'archive' && team) {
+      const backBar = document.createElement('div');
+      backBar.className = 'hat-archive-backbar';
+      backBar.innerHTML = `<button type="button" class="hat-btn-ghost" data-action="archive-back">${esc(tr('archiveBack'))}</button>`;
+      body.appendChild(backBar);
+      const wrap = document.createElement('div');
+      body.appendChild(wrap);
+      renderActiveWorkspace(wrap, team);
+      restoreScroll();
+      return;
+    }
+
     renderActiveWorkspace(body, team);
     restoreScroll();
+  }
+
+  function renderArchiveList(body, archivedTeams) {
+    if (!archivedTeams || !archivedTeams.length) {
+      body.innerHTML = `<div class="hat-empty-state"><p>${esc(tr('archiveEmpty'))}</p></div>`;
+      return;
+    }
+    const fmtDate = (ms) => {
+      if (!ms) return '';
+      try {
+        return new Date(ms).toLocaleString([], { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+      } catch (_e) {
+        return '';
+      }
+    };
+    const rows = archivedTeams
+      .map((t) => {
+        const st = t.stats || {};
+        const dur = formatDuration(computeTeamElapsedMs(t));
+        const armed = uiState.archiveDeleteArmedId === t.id;
+        return `
+          <div class="hat-archive-row">
+            <div class="hat-archive-row-main">
+              <div class="hat-archive-row-top">
+                <span class="hat-archive-name">${esc(t.name)}</span>
+                <span class="hat-archive-date">${esc(fmtDate(t.createdAt))}</span>
+              </div>
+              <div class="hat-archive-meta">
+                ${st.memberCount || (t.members || []).length} ${esc(tr('members'))} · ${st.completed || 0}/${st.total || (t.tasks || []).length} ${esc(tr('done'))} · ⏱ ${esc(dur)}
+              </div>
+            </div>
+            <div class="hat-archive-row-actions">
+              <button type="button" class="hat-btn-secondary hat-archive-btn" data-action="archive-inspect" data-team-id="${esc(t.id)}">${esc(tr('archiveInspect'))}</button>
+              <button type="button" class="hat-icon-btn is-danger" data-action="archive-delete-one" data-team-id="${esc(t.id)}" data-workspace="${esc(t.workspace || '')}" title="${esc(tr('deleteTeam'))}">
+                🗑${armed ? ` ${esc(tr('archiveConfirmOne'))}` : ''}
+              </button>
+            </div>
+          </div>`;
+      })
+      .join('');
+
+    body.innerHTML = `
+      <div class="hat-archive-shell">
+        <div class="hat-archive-head">
+          <span class="hat-dag-title">${esc(tr('archiveListTitle'))} (${archivedTeams.length})</span>
+          <button type="button" class="hat-icon-btn is-danger" data-action="archive-clear-all">
+            🗑 ${esc(uiState.archiveClearAllArmed ? tr('archiveConfirmClearAll') : tr('archiveClearAll'))}
+          </button>
+        </div>
+        <div class="hat-archive-list">${rows}</div>
+      </div>`;
   }
 
   function renderActiveWorkspace(body, team) {
