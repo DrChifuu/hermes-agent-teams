@@ -87,6 +87,12 @@ pub struct TeamSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub captain_session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub captain_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub captain_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub captain_reasoning_effort: Option<String>,
     pub phase: TeamPhase,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plan_review_state: Option<PlanReviewState>,
@@ -260,6 +266,9 @@ fn build_team_snapshot_with_dir(
         workspace,
         description: team.description.clone(),
         captain_session_id: team.captain_session_id.clone(),
+        captain_provider: team.captain_provider.clone(),
+        captain_model: team.captain_model.clone(),
+        captain_reasoning_effort: team.captain_reasoning_effort.clone(),
         phase: team.effective_phase(),
         plan_review_state: team.plan_review_state,
         archived,
@@ -272,7 +281,8 @@ fn build_team_snapshot_with_dir(
     }
 }
 
-/// Collect active + archived snapshots for a workspace, optionally filtered to one captain session.
+/// Collect active + archived snapshots for a workspace, optionally filtering active teams to one captain session.
+/// Archived teams are workspace-scoped history and are always returned so the Archive tab stays populated.
 pub fn collect_workspace_activity(
     store: &TeamStore,
     session_id: Option<&str>,
@@ -291,7 +301,6 @@ pub fn collect_workspace_activity(
         .list_archived_teams()
         .unwrap_or_default()
         .into_iter()
-        .filter(|t| filter_sid.is_none_or(|sid| t.captain_session_id == sid))
         .map(|t| build_team_snapshot(store, &t, true))
         .collect();
 

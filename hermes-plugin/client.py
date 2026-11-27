@@ -107,3 +107,43 @@ class TeamsDaemonClient:
         res = self._request("GET", f"/api/v1/directives/poll{qs}")
         items = res.get("directives")
         return items if isinstance(items, list) else []
+
+    def report_activity(
+        self,
+        *,
+        team_id: str,
+        member: str,
+        kind: str,
+        summary: str,
+        workspace: str | None = None,
+        subagent_id: str | None = None,
+        tool: str | None = None,
+        detail: str | None = None,
+        status: str | None = None,
+        duration_ms: int | None = None,
+        runtime_state: str | None = None,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "teamId": team_id,
+            "member": member,
+            "kind": kind,
+            "summary": summary[:400],
+        }
+        if workspace:
+            payload["workspace"] = workspace
+        if subagent_id:
+            payload["subagentId"] = subagent_id
+        if tool:
+            payload["tool"] = tool
+        if detail:
+            payload["detail"] = detail[:600]
+        if status:
+            payload["status"] = status
+        if duration_ms is not None:
+            payload["durationMs"] = int(max(0, duration_ms))
+        if runtime_state:
+            payload["runtimeState"] = runtime_state
+        if error:
+            payload["error"] = error[:400]
+        return self._request("POST", "/api/v1/activity", payload)

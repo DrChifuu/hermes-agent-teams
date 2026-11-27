@@ -215,8 +215,37 @@ def register(ctx: Any) -> None:
                 return {"context": slash_activation_directive(goal)}
         return None
 
+    def _on_subagent_start(**kwargs: Any) -> None:
+        bridge.register_child_session(
+            str(kwargs.get("child_session_id") or ""),
+            str(kwargs.get("child_subagent_id") or ""),
+        )
+
+    def _on_pre_tool_call(**kwargs: Any) -> dict[str, Any] | None:
+        return bridge.handle_pre_tool_call(
+            tool_name=str(kwargs.get("tool_name") or ""),
+            args=kwargs.get("args"),
+            session_id=str(kwargs.get("session_id") or ""),
+            task_id=str(kwargs.get("task_id") or ""),
+        )
+
+    def _on_post_tool_call(**kwargs: Any) -> None:
+        bridge.handle_post_tool_call(
+            tool_name=str(kwargs.get("tool_name") or ""),
+            args=kwargs.get("args"),
+            result=kwargs.get("result"),
+            session_id=str(kwargs.get("session_id") or ""),
+            task_id=str(kwargs.get("task_id") or ""),
+            duration_ms=int(kwargs.get("duration_ms") or 0),
+            status=kwargs.get("status"),
+            error_message=kwargs.get("error_message"),
+        )
+
     if callable(getattr(ctx, "register_hook", None)):
         ctx.register_hook("pre_llm_call", _pre_llm_call)
+        ctx.register_hook("subagent_start", _on_subagent_start)
+        ctx.register_hook("pre_tool_call", _on_pre_tool_call)
+        ctx.register_hook("post_tool_call", _on_post_tool_call)
 
     if callable(getattr(ctx, "on_unload", None)):
         ctx.on_unload(bridge.stop)

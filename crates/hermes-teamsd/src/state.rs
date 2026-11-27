@@ -17,6 +17,61 @@ pub struct LiveEvent {
     pub ts: u64,
 }
 
+/// One live background activity entry (tool invocation, lifecycle transition, error, or mailbox).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityEvent {
+    pub id: u64,
+    pub ts: u64,
+    pub team_id: String,
+    pub member: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_id: Option<String>,
+    /// `"tool_start" | "tool_end" | "spawned" | "completed" | "failed" | "cancelled" | "blocked" | "message" | "lifecycle"`
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+}
+
+/// Live runtime telemetry snapshot for one background team member.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemberRuntimeState {
+    pub team_id: String,
+    pub member: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_id: Option<String>,
+    /// `"running" | "idle" | "succeeded" | "failed" | "cancelled" | "interrupted"`
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_tool: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_tool_detail: Option<String>,
+    pub tool_count: u64,
+    pub started_at: u64,
+    pub updated_at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct ActivityStore {
+    seq: u64,
+    /// `team_id -> ring buffer of ActivityEvent (newest at back)`
+    events: HashMap<String, VecDeque<ActivityEvent>>,
+    /// `(team_id, member_name) -> live runtime state`
+    runtime: HashMap<(String, String), MemberRuntimeState>,
+}
+
 /// Queued directive waiting to be consumed by the Hermes Python plugin bridge
 /// (used when mutations originate from the `WebUI`: Approve & Run, Feedback, Discard, Halt).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +96,8 @@ struct InnerState {
     events_tx: broadcast::Sender<LiveEvent>,
     /// Track known workspaces so `/api/v1/state` without explicit workspace still finds active teams.
     known_workspaces: Mutex<Vec<PathBuf>>,
+    /// In-memory ring buffer of live background agent activity + per-member runtime status.
+    activity: Mutex<ActivityStore>,
 }
 
 /// Thread-safe shared daemon state.
@@ -65,6 +122,7 @@ impl AppState {
             directive_queue: Mutex::new((0, VecDeque::new())),
             events_tx,
             known_workspaces: Mutex::new(known),
+            activity: Mutex::new(ActivityStore::default()),
         }))
     }
 
@@ -264,5 +322,160 @@ impl AppState {
         }
         guard.1 = remaining;
         drained
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_activity(
+        &self,
+        team_id: &str,
+        member: &str,
+        subagent_id: Option<String>,
+        kind: &str,
+        tool: Option<String>,
+        summary: String,
+        detail: Option<String>,
+        status: Option<String>,
+        duration_ms: Option<u64>,
+        runtime_state: Option<String>,
+        error: Option<String>,
+    ) -> ActivityEvent {
+        let ts = hermes_teams_core::types::now_ms();
+        let mut guard = self
+            .0
+            .activity
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.seq += 1;
+        let id = guard.seq;
+        let is_err_status = status.as_deref() == Some("error");
+        let ev = ActivityEvent {
+            id,
+            ts,
+            team_id: team_id.to_string(),
+            member: member.to_string(),
+            subagent_id: subagent_id.clone(),
+            kind: kind.to_string(),
+            tool: tool.clone(),
+            summary: summary.clone(),
+            detail: detail.clone(),
+            status,
+            duration_ms,
+        };
+        let buf = guard.events.entry(team_id.to_string()).or_default();
+        buf.push_back(ev.clone());
+        while buf.len() > 240 {
+            buf.pop_front();
+        }
+
+        // Update live per-member runtime snapshot when a specific member is referenced.
+        if !member.is_empty() && member != "system" {
+            let key = (team_id.to_string(), member.to_string());
+            let entry = guard
+                .runtime
+                .entry(key)
+                .or_insert_with(|| MemberRuntimeState {
+                    team_id: team_id.to_string(),
+                    member: member.to_string(),
+                    subagent_id: subagent_id.clone(),
+                    state: "idle".to_string(),
+                    current_tool: None,
+                    current_tool_detail: None,
+                    tool_count: 0,
+                    started_at: ts,
+                    updated_at: ts,
+                    last_summary: None,
+                    error: None,
+                });
+            if let Some(sid) = subagent_id.filter(|s| !s.is_empty()) {
+                entry.subagent_id = Some(sid);
+            }
+            entry.updated_at = ts;
+
+            match kind {
+                "spawned" => {
+                    entry.state = "running".to_string();
+                    entry.started_at = ts;
+                    entry.current_tool = None;
+                    entry.current_tool_detail = None;
+                    entry.error = None;
+                    entry.last_summary = Some(summary);
+                }
+                "tool_start" => {
+                    entry.state = "running".to_string();
+                    entry.current_tool = tool;
+                    entry.current_tool_detail = detail.or(Some(summary));
+                }
+                "tool_end" => {
+                    entry.tool_count += 1;
+                    entry.current_tool = None;
+                    entry.current_tool_detail = None;
+                    entry.last_summary = Some(summary);
+                    if is_err_status {
+                        entry.error = error.or(detail);
+                    }
+                }
+                "blocked" => {
+                    entry.current_tool = None;
+                    entry.current_tool_detail = None;
+                    entry.last_summary = Some(summary);
+                }
+                "completed" | "succeeded" => {
+                    entry.state = "succeeded".to_string();
+                    entry.current_tool = None;
+                    entry.current_tool_detail = None;
+                    entry.last_summary = Some(summary);
+                    entry.error = None;
+                }
+                "failed" => {
+                    entry.state = "failed".to_string();
+                    entry.current_tool = None;
+                    entry.current_tool_detail = None;
+                    entry.error = error.or(Some(summary.clone()));
+                    entry.last_summary = Some(summary);
+                }
+                "cancelled" | "interrupted" => {
+                    entry.state = kind.to_string();
+                    entry.current_tool = None;
+                    entry.current_tool_detail = None;
+                    entry.last_summary = Some(summary);
+                }
+                _ => {
+                    if let Some(ref st) = runtime_state {
+                        entry.state.clone_from(st);
+                    }
+                    if let Some(err) = error {
+                        entry.error = Some(err);
+                    }
+                    entry.last_summary = Some(summary);
+                }
+            }
+            if let Some(st) = runtime_state {
+                entry.state = st;
+            }
+        }
+        ev
+    }
+
+    pub fn get_team_activity(
+        &self,
+        team_id: &str,
+    ) -> (Vec<MemberRuntimeState>, Vec<ActivityEvent>) {
+        let guard = self
+            .0
+            .activity
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let events: Vec<ActivityEvent> = guard
+            .events
+            .get(team_id)
+            .map(|q| q.iter().rev().cloned().collect())
+            .unwrap_or_default();
+        let members: Vec<MemberRuntimeState> = guard
+            .runtime
+            .values()
+            .filter(|r| r.team_id == team_id)
+            .cloned()
+            .collect();
+        (members, events)
     }
 }

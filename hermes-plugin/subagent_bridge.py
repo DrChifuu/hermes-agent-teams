@@ -34,6 +34,69 @@ def _maybe_bind_parent(parent: Any):
         yield
 
 
+_FALLBACK_PARENT_TOOLSETS: tuple[str, ...] = (
+    "terminal",
+    "file",
+    "web",
+    "skills",
+    "vision",
+    "code_execution",
+    "agent_teams",
+)
+
+_MEMBER_REQUIRED_TOOLS: tuple[str, ...] = (
+    "agent_teams_claim_task",
+    "agent_teams_update_task",
+    "agent_teams_send_message",
+    "agent_teams_status",
+)
+
+
+def _ensure_parent_has_agent_teams(parent: Any) -> None:
+    """Guarantee that Hermes's `_resolve_child_toolsets(parent, ...)` inherits `agent_teams`.
+
+    When `AIAgent` is created with default `enabled_toolsets=None` (e.g. fallback parent after
+    a server restart), its `valid_tool_names` omits plugin toolsets unless explicitly present,
+    causing child subagents to fail with `'agent_teams_update_task' is not available`.
+    """
+    if parent is None:
+        return
+    try:
+        enabled = getattr(parent, "enabled_toolsets", None)
+        if enabled is not None:
+            if isinstance(enabled, list):
+                if "agent_teams" not in enabled:
+                    enabled.append("agent_teams")
+            elif isinstance(enabled, (tuple, set)):
+                if "agent_teams" not in enabled:
+                    setattr(parent, "enabled_toolsets", list(enabled) + ["agent_teams"])
+        else:
+            valid = getattr(parent, "valid_tool_names", None)
+            if isinstance(valid, list):
+                for tname in _MEMBER_REQUIRED_TOOLS:
+                    if tname not in valid:
+                        valid.append(tname)
+            elif isinstance(valid, set):
+                valid.update(_MEMBER_REQUIRED_TOOLS)
+    except Exception as exc:  # noqa: BLE001
+        _log.debug("Could not augment parent agent toolsets: %s", exc)
+
+
+def _summarize_tool_args(tool_name: str, args: Any) -> str:
+    if not isinstance(args, dict) or not args:
+        return ""
+    for key in ("command", "path", "file_path", "target", "query", "url", "taskId", "task_id", "to", "skill"):
+        val = args.get(key)
+        if isinstance(val, str) and val.strip():
+            clean = " ".join(val.strip().split())
+            return clean[:160]
+    parts = []
+    for k, v in list(args.items())[:3]:
+        if isinstance(v, (str, int, float, bool)):
+            parts.append(f"{k}={str(v)[:60]}")
+    return ", ".join(parts)[:160]
+
+
 def _build_fallback_parent_agent(captain_session_id: str, workspace: str) -> Any | None:
     """Best-effort fallback parent AIAgent when WebUI Approve & Run runs after a server restart."""
     try:
@@ -42,7 +105,9 @@ def _build_fallback_parent_agent(captain_session_id: str, workspace: str) -> Any
         agent = AIAgent(
             session_id=captain_session_id or "hermes-agent-teams-captain",
             quiet_mode=True,
+            enabled_toolsets=list(_FALLBACK_PARENT_TOOLSETS),
         )
+        _ensure_parent_has_agent_teams(agent)
         if workspace:
             setattr(agent, "_working_directory", workspace)
         return agent
@@ -58,13 +123,141 @@ class SubagentBridge:
         self.ctx = ctx
         self.client = client
         self._handles: dict[str, Any] = {}  # subagent_id -> SubagentHandle
-        # subagent_id -> (team_id, member_name, workspace)
-        self._member_lookup: dict[str, tuple[str, str, str]] = {}
+        # subagent_id -> (team_id, member_name, workspace, tool_filter, captain_session_id)
+        self._member_lookup: dict[str, tuple[str, str, str, dict[str, Any] | None, str]] = {}
+        # child_session_id -> subagent_id (populated by subagent_start hook)
+        self._session_to_subagent: dict[str, str] = {}
+        # Track terminal subagents already reported so we reconcile each handle once.
+        self._terminal_reported: set[str] = set()
         self._captain_agents: dict[str, Any] = {}  # captain_session_id -> AIAgent
         self._last_captain_agent: Any = None
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._poller: threading.Thread | None = None
+        self._status_tick: int = 0
+
+    def register_child_session(self, child_session_id: str, child_subagent_id: str) -> None:
+        csid = (child_session_id or "").strip()
+        sub_id = (child_subagent_id or "").strip()
+        if not csid or not sub_id:
+            return
+        with self._lock:
+            self._session_to_subagent[csid] = sub_id
+            if len(self._session_to_subagent) > 256:
+                oldest = next(iter(self._session_to_subagent))
+                self._session_to_subagent.pop(oldest, None)
+
+    def lookup_member_by_ids(
+        self, *, subagent_id: str = "", session_id: str = "", task_id: str = ""
+    ) -> tuple[str, str, str, str, dict[str, Any] | None] | None:
+        """Return `(team_id, member_name, workspace, subagent_id, tool_filter)` if tracked."""
+        with self._lock:
+            candidates = [subagent_id.strip(), task_id.strip()]
+            csid = session_id.strip()
+            if csid and csid in self._session_to_subagent:
+                candidates.append(self._session_to_subagent[csid])
+            for cand in candidates:
+                if cand and cand in self._member_lookup:
+                    team_id, mname, ws, tfilter, _cs = self._member_lookup[cand]
+                    return (team_id, mname, ws, cand, tfilter)
+        return None
+
+    def emit_activity_async(self, **kwargs: Any) -> None:
+        """Best-effort non-blocking telemetry push to local loopback hermes-teamsd."""
+        def _send() -> None:
+            try:
+                self.client.report_activity(**kwargs)
+            except Exception:  # noqa: BLE001
+                pass
+
+        threading.Thread(target=_send, name="hat-activity", daemon=True).start()
+
+    def handle_pre_tool_call(
+        self,
+        *,
+        tool_name: str,
+        args: Any,
+        session_id: str = "",
+        task_id: str = "",
+    ) -> dict[str, Any] | None:
+        info = self.lookup_member_by_ids(session_id=session_id, task_id=task_id)
+        if info is None:
+            return None
+        team_id, member_name, workspace, subagent_id, tool_filter = info
+        arg_preview = _summarize_tool_args(tool_name, args)
+
+        # Enforce owner-declared tool policy (e.g. readonly reviewer/architect cannot write_file/patch).
+        if isinstance(tool_filter, dict):
+            deny = tool_filter.get("deny") or []
+            allow = tool_filter.get("allow")
+            blocked = tool_name in deny or (isinstance(allow, list) and allow and tool_name not in allow)
+            if blocked:
+                msg = f"Tool '{tool_name}' bloqueada por política de solo lectura del rol '{member_name}'."
+                self.emit_activity_async(
+                    team_id=team_id,
+                    member=member_name,
+                    workspace=workspace,
+                    subagent_id=subagent_id,
+                    kind="blocked",
+                    tool=tool_name,
+                    summary=msg,
+                    detail=arg_preview or None,
+                    status="blocked",
+                )
+                return {"action": "block", "message": msg}
+
+        self.emit_activity_async(
+            team_id=team_id,
+            member=member_name,
+            workspace=workspace,
+            subagent_id=subagent_id,
+            kind="tool_start",
+            tool=tool_name,
+            summary=f"Ejecutando {tool_name}" + (f": {arg_preview}" if arg_preview else ""),
+            detail=arg_preview or None,
+            status="running",
+            runtime_state="running",
+        )
+        return None
+
+    def handle_post_tool_call(
+        self,
+        *,
+        tool_name: str,
+        args: Any,
+        result: Any,
+        session_id: str = "",
+        task_id: str = "",
+        duration_ms: int = 0,
+        status: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        info = self.lookup_member_by_ids(session_id=session_id, task_id=task_id)
+        if info is None:
+            return
+        team_id, member_name, workspace, subagent_id, _tfilter = info
+        arg_preview = _summarize_tool_args(tool_name, args)
+        st = (status or "ok").lower()
+        is_err = st in {"error", "failed", "cancelled"} or bool(error_message)
+        summary = f"{tool_name}" + (f" ({arg_preview})" if arg_preview else "")
+        if is_err and error_message:
+            detail = str(error_message)[:400]
+        else:
+            raw_res = result if isinstance(result, str) else str(result or "")
+            detail = " ".join(raw_res.split())[:240] if raw_res else None
+        self.emit_activity_async(
+            team_id=team_id,
+            member=member_name,
+            workspace=workspace,
+            subagent_id=subagent_id,
+            kind="tool_end",
+            tool=tool_name,
+            summary=summary,
+            detail=detail,
+            status="error" if is_err else "ok",
+            duration_ms=duration_ms,
+            error=str(error_message)[:300] if is_err and error_message else None,
+        )
 
     def remember_captain_agent(self, session_id: str, parent_agent: Any) -> None:
         if parent_agent is None:
@@ -124,6 +317,8 @@ class SubagentBridge:
                                     str(team.get("id") or ""),
                                     name,
                                     fallback_workspace,
+                                    None,
+                                    str(team.get("captainSessionId") or ""),
                                 )
                             return (name, fallback_workspace or None)
         except Exception:  # noqa: BLE001
@@ -155,6 +350,80 @@ class SubagentBridge:
                         self.execute_directives([directive], workspace=ws)
             except Exception as exc:  # noqa: BLE001
                 _log.debug("hermes-agent-teams directive poll tick error: %s", exc)
+
+            # Reconcile tracked subagent handles every ~1.5s to detect completions & crashes.
+            self._status_tick += 1
+            if self._status_tick % 3 == 0:
+                try:
+                    self._reconcile_handles()
+                except Exception as exc:  # noqa: BLE001
+                    _log.debug("hermes-agent-teams handle reconcile tick error: %s", exc)
+
+    def _reconcile_handles(self) -> None:
+        lifecycle = getattr(self.ctx, "subagent_lifecycle", None)
+        if lifecycle is None:
+            return
+        with self._lock:
+            tracked = [
+                (sid, handle, self._member_lookup.get(sid))
+                for sid, handle in list(self._handles.items())
+                if sid not in self._terminal_reported
+            ]
+        for sid, handle, meta in tracked:
+            if not meta:
+                continue
+            team_id, member_name, workspace, _tfilter, captain_sid = meta
+            parent = self._get_parent_agent(captain_sid, workspace)
+            try:
+                with _maybe_bind_parent(parent):
+                    st = lifecycle.status(handle)
+                state_name = str(getattr(st.state, "value", st.state) or "").upper()
+                if state_name in {"SUCCEEDED", "FAILED", "CANCELLED", "INTERRUPTED"}:
+                    with _maybe_bind_parent(parent):
+                        res = lifecycle.result(handle)
+                    with self._lock:
+                        self._terminal_reported.add(sid)
+                    summary = str(getattr(res, "summary", None) or "").strip()
+                    err_msg = str(getattr(res, "error_message", None) or "").strip()
+                    api_calls = (getattr(res, "usage_metadata", None) or {}).get("api_calls")
+                    dur_s = (getattr(res, "tool_execution_summary", None) or {}).get("duration_seconds")
+                    dur_ms = int(float(dur_s) * 1000) if dur_s else None
+
+                    if state_name == "SUCCEEDED":
+                        kind = "completed"
+                        r_state = "succeeded"
+                        msg = f"Turno finalizado ({api_calls or '?'} llamadas API)"
+                    elif state_name == "FAILED":
+                        kind = "failed"
+                        r_state = "failed"
+                        msg = f"Subagente falló: {err_msg or 'error desconocido'}"
+                        self.client.bind_member(
+                            workspace=workspace,
+                            team_id=team_id,
+                            member_name=member_name,
+                            subagent_id=sid,
+                            spawn_error=err_msg or "Subagent execution failed",
+                        )
+                    else:
+                        kind = "cancelled"
+                        r_state = state_name.lower()
+                        msg = f"Subagente {state_name.lower()}"
+
+                    self.client.report_activity(
+                        team_id=team_id,
+                        member=member_name,
+                        workspace=workspace,
+                        subagent_id=sid,
+                        kind=kind,
+                        summary=msg,
+                        detail=summary[:500] if summary else (err_msg[:400] if err_msg else None),
+                        status="error" if state_name == "FAILED" else "ok",
+                        duration_ms=dur_ms,
+                        runtime_state=r_state,
+                        error=err_msg[:350] if err_msg else None,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                _log.debug("Reconcile check failed for %s: %s", sid, exc)
 
     def execute_directives(self, directives: list[dict[str, Any]], *, workspace: str) -> None:
         for directive in directives:
@@ -198,6 +467,7 @@ class SubagentBridge:
         full_context = "\n\n".join(context_parts)
 
         parent = self._get_parent_agent(captain_session_id, workspace)
+        _ensure_parent_has_agent_teams(parent)
         subagent_id = ""
         spawn_error: str | None = None
 
@@ -231,7 +501,14 @@ class SubagentBridge:
                 if subagent_id:
                     with self._lock:
                         self._handles[subagent_id] = handle
-                        self._member_lookup[subagent_id] = (team_id, member_name, workspace)
+                        self._terminal_reported.discard(subagent_id)
+                        self._member_lookup[subagent_id] = (
+                            team_id,
+                            member_name,
+                            workspace,
+                            tool_filter if isinstance(tool_filter, dict) else None,
+                            captain_session_id,
+                        )
                     _log.info(
                         "Spawned Hermes subagent %s for team=%s member=%s (%s/%s)",
                         subagent_id,

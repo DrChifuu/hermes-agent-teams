@@ -13,6 +13,7 @@
       title: 'Agent Teams',
       activeTab: 'Equipo activo',
       archiveTab: 'Archivo',
+      liveTab: 'En vivo',
       captain: 'Capitán',
       captainSub: 'Desglosa · Delega · Consolida',
       totalProgress: 'Progreso total',
@@ -27,7 +28,13 @@
       collapse: 'Contraer',
       expand: 'Expandir',
       taskDeps: 'Dependencias de tareas',
-      dagHint: 'De izquierda a derecha · clic para inspeccionar',
+      dagHintHorizontal: 'De izquierda a derecha · clic para inspeccionar',
+      dagHintVertical: 'De arriba a abajo · clic para inspeccionar',
+      dagAuto: 'Auto',
+      dagVertical: 'Vertical',
+      dagHorizontal: 'Horizontal',
+      dagExpandHeight: 'Extender',
+      dagCompactHeight: 'Compactar',
       noTasks: 'Aún no hay tareas planificadas.',
       unassigned: 'sin asignar',
       stopTeam: 'Detener equipo',
@@ -55,11 +62,25 @@
       statusDone: 'Finalizado',
       statusArchived: 'Archivado',
       dispatched: 'Capitán asignó',
+      liveTitle: 'Agentes en segundo plano',
+      liveSubtitle: 'Actividad real de herramientas, subagentes y buzón P2P',
+      liveAll: 'Todos',
+      liveTools: 'herramientas',
+      liveRunning: 'Ejecutando',
+      liveIdle: 'En espera',
+      liveSucceeded: 'Turno listo',
+      liveFailed: 'Error',
+      liveCancelled: 'Detenido',
+      liveNoEvents: 'Sin eventos en segundo plano todavía. En cuanto un subagente ejecute herramientas o envíe mensajes aparecerán aquí en tiempo real.',
+      liveWorkingOn: 'Ejecutando ahora',
+      liveLastActivity: 'Última actividad',
+      liveNoTeam: 'Selecciona o inicia un equipo para observar a los agentes en segundo plano.',
     },
     en: {
       title: 'Agent Teams',
       activeTab: 'Active Team',
       archiveTab: 'Archive',
+      liveTab: 'Live',
       captain: 'Captain',
       captainSub: 'Plan · Delegate · Consolidate',
       totalProgress: 'Total progress',
@@ -74,7 +95,13 @@
       collapse: 'Collapse',
       expand: 'Expand',
       taskDeps: 'Task Dependencies',
-      dagHint: 'Left to right · click a node to inspect',
+      dagHintHorizontal: 'Left to right · click a node to inspect',
+      dagHintVertical: 'Top to bottom · click a node to inspect',
+      dagAuto: 'Auto',
+      dagVertical: 'Vertical',
+      dagHorizontal: 'Horizontal',
+      dagExpandHeight: 'Expand',
+      dagCompactHeight: 'Compact',
       noTasks: 'No tasks planned yet.',
       unassigned: 'unassigned',
       stopTeam: 'Stop team',
@@ -102,6 +129,19 @@
       statusDone: 'Completed',
       statusArchived: 'Archived',
       dispatched: 'Assigned',
+      liveTitle: 'Background Agents',
+      liveSubtitle: 'Real-time tool calls, subagent status, and P2P mailbox stream',
+      liveAll: 'All',
+      liveTools: 'tools',
+      liveRunning: 'Running',
+      liveIdle: 'Idle',
+      liveSucceeded: 'Turn finished',
+      liveFailed: 'Failed',
+      liveCancelled: 'Cancelled',
+      liveNoEvents: 'No background events recorded yet. Tool calls, lifecycle transitions, and P2P messages will appear here live.',
+      liveWorkingOn: 'Running now',
+      liveLastActivity: 'Last activity',
+      liveNoTeam: 'Select or start a team to watch agents working in the background.',
     },
   };
 
@@ -127,19 +167,58 @@
     return dict[key] || STRINGS.en[key] || key;
   }
 
+  function formatTime(ms) {
+    if (!ms) return '';
+    try {
+      const d = new Date(ms);
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } catch (_e) {
+      return '';
+    }
+  }
+
+  function formatRelative(ms) {
+    if (!ms) return '';
+    const diff = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+    if (diff < 5) return getLang() === 'es' ? 'ahora' : 'now';
+    if (diff < 60) return `${diff}s`;
+    const mins = Math.floor(diff / 60);
+    if (mins < 60) return `${mins}m`;
+    const hrs = Math.floor(mins / 60);
+    return `${hrs}h`;
+  }
+
+  function formatRoute(provider, model) {
+    const m = String(model || '').trim();
+    const p = String(provider || '').trim();
+    if (!m) return '';
+    if (m.startsWith('@') && m.includes(':')) {
+      const idx = m.indexOf(':');
+      return `${m.slice(1, idx)}/${m.slice(idx + 1)}`;
+    }
+    if (m.includes('/')) return m;
+    return p ? `${p}/${m}` : m;
+  }
+
   const uiState = {
     open: false,
     floating: false,
-    tab: 'active',
+    tab: 'active', // 'active' | 'archive' | 'live'
     selectedTeamId: null,
     membersCollapsed: false,
     selectedTaskId: null,
     hoveredTaskId: null,
+    dagOrientation: 'auto', // 'auto' | 'vertical' | 'horizontal'
+    dagExpanded: false,
+    liveMemberFilter: 'all',
     stopArmed: false,
     editorDirty: false,
     lastPayloadSig: '',
+    lastActivitySig: '',
     apiBase: PROXY_BASE,
     payload: { teams: [], archived: [] },
+    activity: { teamId: '', members: [], events: [] },
+    captainRoutes: {}, // sessionId -> { provider, model, fetched }
     sse: null,
     pollTimer: null,
   };
@@ -177,12 +256,77 @@
     throw lastErr || new Error('hermes-teamsd unreachable');
   }
 
+  async function ensureCaptainRoute(team) {
+    if (!team) return;
+    if (team.captainModel) return;
+    const sid = team.captainSessionId || detectCurrentSessionId();
+    if (!sid || uiState.captainRoutes[sid]) return;
+    uiState.captainRoutes[sid] = { provider: '', model: '', fetched: false };
+    try {
+      const res = await fetch(
+        `/api/session?session_id=${encodeURIComponent(sid)}&messages=0&resolve_model=1`,
+        { credentials: 'same-origin' }
+      );
+      if (!res.ok) return;
+      const body = await res.json();
+      const sess = (body && body.session) || body || {};
+      const model = String(sess.model || sess.resolved_model || '').trim();
+      const provider = String(sess.model_provider || sess.provider || '').trim();
+      uiState.captainRoutes[sid] = { provider, model, fetched: true };
+      if (model && uiState.open) {
+        render();
+      }
+    } catch (_err) {
+      uiState.captainRoutes[sid] = { provider: '', model: '', fetched: true };
+    }
+  }
+
+  function resolveCaptainRoute(team) {
+    if (!team) return '';
+    if (team.captainModel) {
+      return formatRoute(team.captainProvider, team.captainModel);
+    }
+    const sid = team.captainSessionId || detectCurrentSessionId();
+    const cached = sid && uiState.captainRoutes[sid];
+    if (cached && cached.model) {
+      return formatRoute(cached.provider, cached.model);
+    }
+    return '';
+  }
+
+  async function refreshActivity(team, forceRender) {
+    if (!team) {
+      uiState.activity = { teamId: '', members: [], events: [] };
+      return false;
+    }
+    try {
+      const params = new URLSearchParams({ team_id: team.id });
+      if (team.workspace) params.set('workspace', team.workspace);
+      if (team.archived) params.set('archived', '1');
+      const data = await apiFetch(`/api/v1/activity?${params.toString()}`);
+      const nextAct = {
+        teamId: team.id,
+        members: Array.isArray(data && data.members) ? data.members : [],
+        events: Array.isArray(data && data.events) ? data.events : [],
+      };
+      const sig = JSON.stringify(nextAct);
+      const changed = sig !== uiState.lastActivitySig;
+      uiState.activity = nextAct;
+      uiState.lastActivitySig = sig;
+      if (changed && uiState.tab === 'live' && uiState.open && !forceRender) {
+        render();
+      }
+      return changed;
+    } catch (_err) {
+      return false;
+    }
+  }
+
   async function refreshState(forceRender) {
     try {
       const sid = detectCurrentSessionId();
       const qs = sid ? `?session_id=${encodeURIComponent(sid)}` : '';
       let data = await apiFetch(`/api/v1/state${qs}`);
-      // If session-scoped filter is empty, fall back to workspace-wide active teams so the user always sees their team.
       if (sid && (!data.teams || !data.teams.length) && (!data.archived || !data.archived.length)) {
         data = await apiFetch('/api/v1/state');
       }
@@ -198,11 +342,20 @@
         forceRender = true;
       }
 
-      if (!forceRender && !changed) return;
-
-      // Avoid clobbering unsaved edits or stealing focus while editing a staged plan.
       const activeTeam = currentTeam();
+      if (activeTeam) {
+        void ensureCaptainRoute(activeTeam);
+      }
+
+      let actChanged = false;
+      if (uiState.open && (uiState.tab === 'live' || (activeTeam && activeTeam.phase === 'running'))) {
+        actChanged = await refreshActivity(activeTeam, true);
+      }
+
+      if (!forceRender && !changed && !actChanged) return;
+
       const editingStaged =
+        uiState.tab === 'active' &&
         activeTeam &&
         activeTeam.phase === 'staged' &&
         !activeTeam.archived &&
@@ -223,10 +376,6 @@
       uiState.sse.close();
       uiState.sse = null;
     }
-    // Hermes WebUI's sidecar proxy buffers standard REST responses and does not
-    // stream long-lived SSE connections (returning 502 on idle timeout). Use SSE
-    // only on direct loopback access; through the WebUI proxy, adaptive polling
-    // + turn lifecycle hooks keep state live with zero proxy errors.
     if (uiState.apiBase !== DIRECT_BASE) {
       return;
     }
@@ -255,6 +404,7 @@
     uiState.open = !uiState.open;
     uiState._userClosed = !uiState.open;
     render();
+    if (uiState.open) void refreshState(true);
   });
 
   const panel = document.createElement('aside');
@@ -272,8 +422,27 @@
     }
   });
 
+  // Re-evaluate automatic DAG vertical/horizontal layout on viewport resize
+  let resizeTimer = null;
+  window.addEventListener('resize', () => {
+    if (!uiState.open || uiState.dagOrientation !== 'auto') return;
+    if (resizeTimer) window.clearTimeout(resizeTimer);
+    resizeTimer = window.setTimeout(() => {
+      if (uiState.open && uiState.tab !== 'live') render();
+    }, 120);
+  });
+
   function currentTeam() {
-    const list = uiState.tab === 'archive' ? uiState.payload.archived : uiState.payload.teams;
+    const activeTeams = uiState.payload.teams || [];
+    const archivedTeams = uiState.payload.archived || [];
+    const list =
+      uiState.tab === 'archive'
+        ? archivedTeams
+        : uiState.tab === 'live'
+          ? activeTeams.length
+            ? activeTeams
+            : archivedTeams
+          : activeTeams;
     if (!Array.isArray(list) || !list.length) return null;
     if (uiState.selectedTeamId) {
       const found = list.find((t) => t.id === uiState.selectedTeamId);
@@ -312,6 +481,7 @@
     if (!uiState.open) return;
 
     const team = currentTeam();
+    if (team) void ensureCaptainRoute(team);
     const meta = team ? statusMeta(team) : null;
     const stats = (team && team.stats) || {
       total: 0,
@@ -324,6 +494,16 @@
     };
 
     const showStop = team && !team.archived && !team.halted && team.phase !== 'staged';
+    const switcherList =
+      uiState.tab === 'archive'
+        ? archivedTeams
+        : uiState.tab === 'live'
+          ? activeTeams.concat(archivedTeams)
+          : activeTeams;
+    const liveActiveCount = activeTeams.reduce(
+      (acc, t) => acc + (t.members || []).filter((m) => m.activity === 'working').length,
+      0
+    );
 
     panel.innerHTML = `
       <div class="hat-resize-left" data-resize="left"></div>
@@ -361,10 +541,14 @@
         <button type="button" class="hat-tab${uiState.tab === 'archive' ? ' is-active' : ''}" data-tab="archive">
           ${esc(tr('archiveTab'))} (${archivedTeams.length})
         </button>
+        <button type="button" class="hat-tab hat-tab-live${uiState.tab === 'live' ? ' is-active' : ''}" data-tab="live">
+          <span class="hat-live-dot${liveActiveCount > 0 ? ' is-busy' : ''}"></span>
+          ${esc(tr('liveTab'))}${liveActiveCount > 0 ? ` (${liveActiveCount})` : ''}
+        </button>
         ${
-          (uiState.tab === 'archive' ? archivedTeams : activeTeams).length > 1
+          switcherList.length > 1
             ? `<select class="hat-team-switcher" data-action="switch-team" aria-label="Select team">
-                ${(uiState.tab === 'archive' ? archivedTeams : activeTeams)
+                ${switcherList
                   .map(
                     (t) =>
                       `<option value="${esc(t.id)}"${team && t.id === team.id ? ' selected' : ''}>${esc(t.name)} (${(t.stats && t.stats.completed) || 0}/${(t.stats && t.stats.total) || 0})</option>`
@@ -380,6 +564,12 @@
     wireHeaderControls(team);
 
     const body = panel.querySelector('#hat-body');
+
+    if (uiState.tab === 'live') {
+      renderLiveWorkspace(body, team);
+      return;
+    }
+
     if (!team) {
       body.innerHTML = `
         <div class="hat-empty-state">
@@ -445,6 +635,7 @@
     const tasks = team.tasks || [];
     const members = team.members || [];
     const allDone = stats.total > 0 && stats.completed === stats.total;
+    const captainRoute = resolveCaptainRoute(team);
 
     const segments = tasks
       .map((t) => {
@@ -458,7 +649,7 @@
       .map((m) => {
         const imgUrl = art.memberArtUrl(m.name, m.role);
         const actionImg = art.actionArtUrl(allDone ? 'celebrating' : m.activity || 'idle');
-        const route = m.provider && m.model ? `${m.provider}/${m.model}` : m.model || '';
+        const route = formatRoute(m.provider, m.model);
         const chips = (m.assignedTaskIds || [])
           .map((tid) => {
             const taskObj = tasks.find((x) => x.id === tid);
@@ -479,7 +670,7 @@
                 <span class="hat-member-role">${esc(m.role)}</span>
                 ${route ? `<span class="hat-model-pill" title="${esc(route)}">${esc(window.HermesTeamsDag.shortModel(route))}</span>` : ''}
               </div>
-              <div class="hat-member-state">${esc(m.currentTask || m.spawnError || (allDone ? tr('statusDone') : m.status))}</div>
+              <div class="hat-member-state${m.spawnError ? ' is-error' : ''}">${esc(m.currentTask || m.spawnError || (allDone ? tr('statusDone') : m.status))}</div>
               ${chips ? `<div class="hat-member-tasks"><span class="hat-member-role">${esc(tr('dispatched'))}</span>${chips}</div>` : ''}
             </div>
             <div class="hat-member-ratio">${m.completedTasks}/${m.totalTasks}</div>
@@ -502,6 +693,11 @@
                 <span>${esc(tr('captain'))}</span>
                 <span class="hat-member-role">${esc(tr('captainSub'))}</span>
               </div>
+              ${
+                captainRoute
+                  ? `<div class="hat-captain-model-row"><span class="hat-model-pill hat-captain-model" title="${esc(captainRoute)}">${esc(window.HermesTeamsDag.shortModel(captainRoute))}</span></div>`
+                  : ''
+              }
               <div class="hat-captain-sub">
                 ${stats.total} ${esc(tr('tasks'))} · ${stats.memberCount} ${esc(tr('members'))}
               </div>
@@ -534,8 +730,20 @@
 
         <div class="hat-dag-col">
           <div class="hat-dag-header">
-            <span class="hat-dag-title">⎇ ${esc(tr('taskDeps'))}</span>
-            <span class="hat-dag-hint">${esc(tr('dagHint'))}</span>
+            <div class="hat-dag-header-left">
+              <span class="hat-dag-title">⎇ ${esc(tr('taskDeps'))}</span>
+              <span class="hat-dag-hint" id="hat-dag-hint">${esc(tr('dagHintHorizontal'))}</span>
+            </div>
+            <div class="hat-dag-controls">
+              <div class="hat-seg-toggle" role="group" aria-label="DAG layout">
+                <button type="button" class="hat-seg-btn${uiState.dagOrientation === 'auto' ? ' is-active' : ''}" data-dag-orient="auto" title="${esc(tr('dagAuto'))}">${esc(tr('dagAuto'))}</button>
+                <button type="button" class="hat-seg-btn${uiState.dagOrientation === 'vertical' ? ' is-active' : ''}" data-dag-orient="vertical" title="${esc(tr('dagVertical'))}">⇅</button>
+                <button type="button" class="hat-seg-btn${uiState.dagOrientation === 'horizontal' ? ' is-active' : ''}" data-dag-orient="horizontal" title="${esc(tr('dagHorizontal'))}">⇄</button>
+              </div>
+              <button type="button" class="hat-seg-btn hat-dag-expand-btn${uiState.dagExpanded ? ' is-active' : ''}" data-action="toggle-dag-expand" title="${esc(uiState.dagExpanded ? tr('dagCompactHeight') : tr('dagExpandHeight'))}">
+                ${uiState.dagExpanded ? '⇕ −' : '⇕ +'}
+              </button>
+            </div>
           </div>
           <div id="hat-dag-mount"></div>
           ${selectedTask ? renderTaskInspector(selectedTask) : ''}
@@ -555,10 +763,28 @@
       });
     });
 
+    body.querySelectorAll('[data-dag-orient]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        uiState.dagOrientation = btn.getAttribute('data-dag-orient') || 'auto';
+        render();
+      });
+    });
+
+    const expandDagBtn = body.querySelector('[data-action="toggle-dag-expand"]');
+    if (expandDagBtn) {
+      expandDagBtn.addEventListener('click', () => {
+        uiState.dagExpanded = !uiState.dagExpanded;
+        render();
+      });
+    }
+
     const dagMount = body.querySelector('#hat-dag-mount');
-    window.HermesTeamsDag.renderDag(dagMount, team, {
+    const dagHintEl = body.querySelector('#hat-dag-hint');
+    const mountOpts = {
       selectedTaskId: uiState.selectedTaskId || (selectedTask && selectedTask.id),
       hoveredTaskId: uiState.hoveredTaskId,
+      orientation: uiState.dagOrientation,
+      expanded: uiState.dagExpanded,
       tr,
       onSelectTask: (tid) => {
         uiState.selectedTaskId = tid;
@@ -567,18 +793,192 @@
       onHoverTask: (tid) => {
         if (uiState.hoveredTaskId !== tid) {
           uiState.hoveredTaskId = tid;
-          window.HermesTeamsDag.renderDag(dagMount, team, {
-            selectedTaskId: uiState.selectedTaskId || (selectedTask && selectedTask.id),
-            hoveredTaskId: uiState.hoveredTaskId,
-            tr,
-            onSelectTask: (nextId) => {
-              uiState.selectedTaskId = nextId;
-              render();
-            },
-            onHoverTask: () => {},
-          });
+          window.HermesTeamsDag.renderDag(
+            dagMount,
+            team,
+            Object.assign({}, mountOpts, { hoveredTaskId: tid, onHoverTask: () => {} })
+          );
         }
       },
+    };
+    const res = window.HermesTeamsDag.renderDag(dagMount, team, mountOpts);
+    if (dagHintEl && res && res.orientation) {
+      dagHintEl.textContent =
+        res.orientation === 'vertical' ? tr('dagHintVertical') : tr('dagHintHorizontal');
+    }
+  }
+
+  function renderLiveWorkspace(body, team) {
+    const art = window.HermesTeamsArtwork;
+    if (!team) {
+      body.innerHTML = `
+        <div class="hat-empty-state">
+          <img src="${esc(art.LEAD_ART)}" alt="Captain Ferris" />
+          <div><strong>${esc(tr('liveTitle'))}</strong></div>
+          <p>${esc(tr('liveNoTeam'))}</p>
+        </div>`;
+      return;
+    }
+
+    const act = uiState.activity && uiState.activity.teamId === team.id ? uiState.activity : { members: [], events: [] };
+    const runtimeByName = new Map((act.members || []).map((r) => [r.member, r]));
+    const captainRoute = resolveCaptainRoute(team);
+    const members = team.members || [];
+
+    const stateLabel = (st) => {
+      switch (st) {
+        case 'running':
+        case 'working':
+          return { cls: 'is-running', text: tr('liveRunning') };
+        case 'succeeded':
+        case 'completed':
+          return { cls: 'is-done', text: tr('liveSucceeded') };
+        case 'failed':
+          return { cls: 'is-halted', text: tr('liveFailed') };
+        case 'cancelled':
+        case 'interrupted':
+          return { cls: 'is-staged', text: tr('liveCancelled') };
+        default:
+          return { cls: '', text: tr('liveIdle') };
+      }
+    };
+
+    const cardsHtml = [
+      // Captain live card
+      (() => {
+        const capRt = runtimeByName.get('captain');
+        const capBusy = team.phase === 'running' && !team.halted && (team.stats && team.stats.completed < team.stats.total);
+        const capPill = stateLabel(capRt ? capRt.state : capBusy ? 'running' : 'idle');
+        return `
+          <div class="hat-live-card${capBusy ? ' is-active' : ''}">
+            <div class="hat-live-card-top">
+              <div class="hat-avatar-wrap">
+                <img class="hat-avatar${capBusy ? ' is-working' : ' is-idle'}" src="${esc(art.LEAD_ART)}" alt="Captain" />
+              </div>
+              <div class="hat-live-card-id">
+                <div class="hat-member-top">
+                  <span class="hat-member-name">${esc(tr('captain'))}</span>
+                  ${captainRoute ? `<span class="hat-model-pill" title="${esc(captainRoute)}">${esc(window.HermesTeamsDag.shortModel(captainRoute))}</span>` : ''}
+                </div>
+                <div class="hat-live-sub-id">${esc(team.captainSessionId || 'session')}</div>
+              </div>
+              <span class="hat-status-pill ${capPill.cls}">${esc(capPill.text)}</span>
+            </div>
+            <div class="hat-live-card-now">
+              ${esc((capRt && (capRt.currentTool || capRt.lastSummary)) || tr('captainSub'))}
+            </div>
+          </div>`;
+      })(),
+      ...members.map((m) => {
+        const rt = runtimeByName.get(m.name);
+        const route = formatRoute(m.provider, m.model);
+        const effectiveState = (rt && rt.state) || (m.spawnError ? 'failed' : m.activity === 'working' ? 'running' : 'idle');
+        const pill = stateLabel(effectiveState);
+        const imgUrl = art.memberArtUrl(m.name, m.role);
+        const actionImg = art.actionArtUrl(effectiveState === 'running' ? 'working' : effectiveState === 'succeeded' ? 'celebrating' : 'idle');
+        const currentLine =
+          (rt && rt.currentTool
+            ? `⚡ ${rt.currentTool}${rt.currentToolDetail ? `: ${rt.currentToolDetail}` : ''}`
+            : '') ||
+          (rt && rt.error) ||
+          m.spawnError ||
+          (rt && rt.lastSummary) ||
+          m.currentTask ||
+          tr('liveIdle');
+        const toolCount = (rt && rt.toolCount) || 0;
+        const updated = (rt && rt.updatedAt) || 0;
+
+        return `
+          <div class="hat-live-card${effectiveState === 'running' ? ' is-active' : ''}${effectiveState === 'failed' ? ' is-failed' : ''}">
+            <div class="hat-live-card-top">
+              <div class="hat-avatar-wrap${m.unread > 0 ? ' has-unread' : ''}">
+                <img class="hat-avatar is-${effectiveState === 'running' ? 'working' : 'idle'}" src="${esc(imgUrl)}" alt="${esc(m.name)}" />
+                <img class="hat-action-chip" src="${esc(actionImg)}" alt="${esc(effectiveState)}" />
+              </div>
+              <div class="hat-live-card-id">
+                <div class="hat-member-top">
+                  <span class="hat-member-name">${esc(m.name)}</span>
+                  <span class="hat-member-role">${esc(m.role)}</span>
+                  ${route ? `<span class="hat-model-pill" title="${esc(route)}">${esc(window.HermesTeamsDag.shortModel(route))}</span>` : ''}
+                </div>
+                <div class="hat-live-sub-id">${esc((rt && rt.subagentId) || m.id || 'pendiente')}</div>
+              </div>
+              <span class="hat-status-pill ${pill.cls}">${esc(pill.text)}</span>
+            </div>
+            <div class="hat-live-card-now${effectiveState === 'failed' ? ' is-error' : ''}" title="${esc(currentLine)}">
+              ${esc(currentLine)}
+            </div>
+            <div class="hat-live-card-foot">
+              <span>${toolCount} ${esc(tr('liveTools'))} · ${m.completedTasks}/${m.totalTasks} ${esc(tr('done'))}</span>
+              ${updated ? `<span>${esc(formatRelative(updated))}</span>` : ''}
+            </div>
+          </div>`;
+      }),
+    ].join('');
+
+    const filterNames = ['all', 'captain'].concat(members.map((m) => m.name));
+    const filterHtml = filterNames
+      .map((name) => {
+        const label = name === 'all' ? tr('liveAll') : name === 'captain' ? tr('captain') : name;
+        return `<button type="button" class="hat-filter-chip${uiState.liveMemberFilter === name ? ' is-active' : ''}" data-live-filter="${esc(name)}">${esc(label)}</button>`;
+      })
+      .join('');
+
+    const filteredEvents = (act.events || []).filter(
+      (ev) => uiState.liveMemberFilter === 'all' || ev.member === uiState.liveMemberFilter
+    );
+
+    const kindBadge = (ev) => {
+      if (ev.kind === 'tool_start') return { cls: 'is-running', text: ev.tool || 'tool' };
+      if (ev.kind === 'tool_end') return { cls: ev.status === 'error' ? 'is-halted' : 'is-done', text: ev.tool || 'tool' };
+      if (ev.kind === 'blocked') return { cls: 'is-halted', text: `⛔ ${ev.tool || 'blocked'}` };
+      if (ev.kind === 'failed') return { cls: 'is-halted', text: 'error' };
+      if (ev.kind === 'message') return { cls: 'is-staged', text: ev.tool || 'msg' };
+      if (ev.kind === 'spawned') return { cls: 'is-running', text: 'spawn' };
+      if (ev.kind === 'completed') return { cls: 'is-done', text: 'done' };
+      return { cls: '', text: ev.tool || ev.kind || 'event' };
+    };
+
+    const feedHtml = filteredEvents.length
+      ? filteredEvents
+          .map((ev) => {
+            const kb = kindBadge(ev);
+            const dur = Number.isFinite(ev.durationMs) ? `${ev.durationMs}ms` : '';
+            return `
+              <div class="hat-live-row kind-${esc(ev.kind || 'event')}${ev.status === 'error' ? ' is-error' : ''}">
+                <div class="hat-live-row-head">
+                  <span class="hat-live-time">${esc(formatTime(ev.ts))}</span>
+                  <span class="hat-live-actor">${esc(ev.member === 'captain' ? tr('captain') : ev.member)}</span>
+                  <span class="hat-status-pill hat-live-kind ${kb.cls}">${esc(kb.text)}</span>
+                  ${dur ? `<span class="hat-live-dur">${esc(dur)}</span>` : ''}
+                </div>
+                <div class="hat-live-summary">${esc(ev.summary)}</div>
+                ${ev.detail && ev.detail !== ev.summary ? `<div class="hat-live-detail">${esc(ev.detail)}</div>` : ''}
+              </div>`;
+          })
+          .join('')
+      : `<div class="hat-empty-dag">${esc(tr('liveNoEvents'))}</div>`;
+
+    body.innerHTML = `
+      <div class="hat-live-shell">
+        <div class="hat-live-header">
+          <div>
+            <div class="hat-dag-title">⚡ ${esc(tr('liveTitle'))}</div>
+            <div class="hat-dag-hint">${esc(tr('liveSubtitle'))}</div>
+          </div>
+          <span class="hat-live-count">${filteredEvents.length} eventos</span>
+        </div>
+        <div class="hat-live-cards">${cardsHtml}</div>
+        <div class="hat-live-filters">${filterHtml}</div>
+        <div class="hat-live-feed">${feedHtml}</div>
+      </div>
+    `;
+
+    body.querySelectorAll('[data-live-filter]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        uiState.liveMemberFilter = btn.getAttribute('data-live-filter') || 'all';
+        render();
+      });
     });
   }
 
@@ -614,10 +1014,15 @@
     panel.querySelectorAll('[data-tab]').forEach((btn) => {
       btn.addEventListener('click', () => {
         uiState.tab = btn.getAttribute('data-tab');
-        uiState.selectedTeamId = null;
+        if (uiState.tab !== 'live') {
+          uiState.selectedTeamId = null;
+        }
         uiState.selectedTaskId = null;
         uiState.editorDirty = false;
         render();
+        if (uiState.tab === 'live') {
+          void refreshActivity(currentTeam(), false);
+        }
       });
     });
     const switcher = panel.querySelector('[data-action="switch-team"]');
@@ -627,6 +1032,9 @@
         uiState.selectedTaskId = null;
         uiState.editorDirty = false;
         render();
+        if (uiState.tab === 'live') {
+          void refreshActivity(currentTeam(), false);
+        }
       });
     }
     const stopBtn = panel.querySelector('[data-action="stop"]');
@@ -665,6 +1073,9 @@
         const onUp = () => {
           window.removeEventListener('pointermove', onMove);
           window.removeEventListener('pointerup', onUp);
+          if (uiState.dagOrientation === 'auto' && uiState.tab !== 'live') {
+            render();
+          }
         };
         window.addEventListener('pointermove', onMove);
         window.addEventListener('pointerup', onUp);
@@ -678,13 +1089,14 @@
     extHandle.events.on('turn:complete', () => void refreshState());
   }
 
-  // Initial load + adaptive polling (1.5s while a team is actively running, 6s otherwise, paused when hidden)
+  // Initial load + adaptive polling (1.5s while running or viewing Live tab, 6s otherwise)
   function scheduleNextPoll() {
     if (uiState.pollTimer) window.clearTimeout(uiState.pollTimer);
     const hasRunning = (uiState.payload.teams || []).some(
       (t) => !t.halted && t.phase !== 'staged' && (t.stats && t.stats.completed < t.stats.total)
     );
-    const delay = document.hidden ? 10000 : hasRunning ? 1500 : 6000;
+    const fast = hasRunning || (uiState.open && uiState.tab === 'live');
+    const delay = document.hidden ? 10000 : fast ? 1500 : 6000;
     uiState.pollTimer = window.setTimeout(async () => {
       if (!document.hidden && (uiState.open || hasRunning)) {
         await refreshState();

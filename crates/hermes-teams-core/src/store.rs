@@ -205,6 +205,25 @@ impl TeamStore {
         total
     }
 
+    /// Read all messages across all inbox files of a team (active or archived), sorted newest-first.
+    pub fn read_all_team_messages(&self, team_dir: &Path) -> Vec<TeamMessage> {
+        let inbox = team_dir.join("inbox");
+        let Ok(entries) = fs::read_dir(inbox) else {
+            return Vec::new();
+        };
+        let mut all = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                if let Ok(msgs) = read_jsonl(&path) {
+                    all.extend(msgs);
+                }
+            }
+        }
+        all.sort_by_key(|m| std::cmp::Reverse(m.ts));
+        all
+    }
+
     /// Count unread (undiscarded & unread) messages for one member.
     pub fn count_unread(&self, team_dir: &Path, agent: &str) -> usize {
         let path = team_dir.join("inbox").join(format!("{agent}.jsonl"));

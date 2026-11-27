@@ -26,6 +26,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/state", get(state_handler))
         .route("/api/v1/events", get(events_sse_handler))
         .route("/api/v1/inbox", get(inbox_handler))
+        .route(
+            "/api/v1/activity",
+            get(get_activity_handler).post(post_activity_handler),
+        )
         .route("/api/v1/directives/poll", get(poll_directives_handler))
         .route("/api/v1/members/bind", post(bind_member_handler))
         .route("/api/v1/tools/{tool_name}", post(dispatch_tool_handler))
@@ -144,6 +148,114 @@ async fn inbox_handler(
 }
 
 #[derive(Debug, Deserialize)]
+struct ActivityQuery {
+    #[serde(default)]
+    workspace: Option<String>,
+    team_id: String,
+    #[serde(default)]
+    archived: Option<bool>,
+}
+
+async fn get_activity_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<ActivityQuery>,
+) -> Result<Json<Value>, ApiError> {
+    verify_request_auth(state.auth_mode(), &headers)?;
+    let ws = state.resolve_workspace_for_team(q.workspace.as_deref(), &q.team_id);
+    let (runtime_members, mut events) = state.get_team_activity(&q.team_id);
+
+    // Also include durable mailbox messages from disk so the Live tab always shows P2P traffic.
+    let mailbox_msgs = state.with_engine(&ws, |engine| {
+        let dir = if q.archived.unwrap_or(false) {
+            engine.store().archive_dir(&q.team_id)
+        } else {
+            let active = engine.store().team_dir(&q.team_id);
+            if active.is_dir() {
+                active
+            } else {
+                engine.store().archive_dir(&q.team_id)
+            }
+        };
+        engine.store().read_all_team_messages(&dir)
+    });
+
+    for (idx, msg) in mailbox_msgs.into_iter().take(60).enumerate() {
+        events.push(crate::state::ActivityEvent {
+            id: 1_000_000_000 + idx as u64,
+            ts: msg.ts,
+            team_id: q.team_id.clone(),
+            member: msg.from.clone(),
+            subagent_id: None,
+            kind: "message".to_string(),
+            tool: Some(format!("→ {}", msg.to)),
+            summary: msg.content.chars().take(240).collect(),
+            detail: msg.task_id,
+            status: Some("ok".to_string()),
+            duration_ms: None,
+        });
+    }
+    events.sort_by_key(|e| std::cmp::Reverse(e.ts));
+    events.truncate(200);
+
+    Ok(Json(json!({
+        "ok": true,
+        "teamId": q.team_id,
+        "members": runtime_members,
+        "events": events,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PostActivityBody {
+    #[serde(default)]
+    workspace: Option<String>,
+    team_id: String,
+    member: String,
+    #[serde(default)]
+    subagent_id: Option<String>,
+    kind: String,
+    #[serde(default)]
+    tool: Option<String>,
+    summary: String,
+    #[serde(default)]
+    detail: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    duration_ms: Option<u64>,
+    #[serde(default)]
+    runtime_state: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+async fn post_activity_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<PostActivityBody>,
+) -> Result<Json<Value>, ApiError> {
+    verify_request_auth(state.auth_mode(), &headers)?;
+    let ws = state.resolve_workspace_for_team(body.workspace.as_deref(), &body.team_id);
+    let ev = state.record_activity(
+        &body.team_id,
+        &body.member,
+        body.subagent_id,
+        &body.kind,
+        body.tool,
+        body.summary,
+        body.detail,
+        body.status,
+        body.duration_ms,
+        body.runtime_state,
+        body.error,
+    );
+    state.publish_event(&ws, Some(body.team_id), "activity");
+    Ok(Json(json!({ "ok": true, "event": ev })))
+}
+
+#[derive(Debug, Deserialize)]
 struct PollQuery {
     #[serde(default)]
     workspace: Option<String>,
@@ -183,9 +295,38 @@ async fn bind_member_handler(
             &body.team_id,
             &body.member_name,
             &body.subagent_id,
-            body.spawn_error,
+            body.spawn_error.clone(),
         )
     })?;
+    if let Some(ref err) = body.spawn_error {
+        state.record_activity(
+            &body.team_id,
+            &body.member_name,
+            Some(body.subagent_id.clone()),
+            "failed",
+            None,
+            format!("Error al iniciar subagente: {err}"),
+            None,
+            Some("error".to_string()),
+            None,
+            Some("failed".to_string()),
+            Some(err.clone()),
+        );
+    } else if !body.subagent_id.is_empty() {
+        state.record_activity(
+            &body.team_id,
+            &body.member_name,
+            Some(body.subagent_id.clone()),
+            "spawned",
+            None,
+            format!("Subagente {} iniciado en segundo plano", body.subagent_id),
+            None,
+            Some("ok".to_string()),
+            None,
+            Some("running".to_string()),
+            None,
+        );
+    }
     state.publish_event(&ws, Some(out.team.id.clone()), "member_bound");
     Ok(Json(json!({
         "ok": true,
@@ -293,7 +434,24 @@ async fn dispatch_tool_handler(
                 obj.entry("actor").or_insert_with(|| Value::String(actor));
             }
             let input: UpdateTaskInput = serde_json::from_value(val)?;
+            let ev_team = input.team_id.clone();
+            let ev_actor = input.actor.clone();
+            let ev_task = input.task_id.clone();
+            let ev_status = input.status.to_string();
             let out = state.with_engine(&ws, |engine| engine.update_task(input, Some(&ws)))?;
+            state.record_activity(
+                &ev_team,
+                &ev_actor,
+                None,
+                "lifecycle",
+                Some("agent_teams_update_task".to_string()),
+                format!("Tarea {ev_task} → {ev_status}"),
+                Some(out.summary.clone()),
+                Some("ok".to_string()),
+                None,
+                None,
+                None,
+            );
             state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "task_updated");
             Ok(Json(serde_json::to_value(out)?))

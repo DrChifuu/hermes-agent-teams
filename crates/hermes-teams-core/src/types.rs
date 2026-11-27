@@ -534,6 +534,12 @@ pub struct TeamState {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<TeamProfileSnapshot>,
     pub captain_session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub captain_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub captain_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub captain_reasoning_effort: Option<String>,
     pub created_at: u64,
     #[serde(default)]
     pub members: Vec<TeamMember>,
