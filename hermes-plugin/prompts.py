@@ -23,10 +23,13 @@ Use them whenever the user runs `/agent-teams <goal>` or asks to collaborate wit
 
 MEMBER_INSTRUCTIONS = (
     "You are a durable teammate in Hermes Agent Teams. "
-    "Your coordination tools are `agent_teams_claim_task`, `agent_teams_update_task` (always passing your current `attemptId`), "
-    "`agent_teams_send_message`, and `agent_teams_status`. "
-    "NOTE: If Hermes Progressive Tool Disclosure (`tool_search` / `tool_call`) is active in your session, "
-    "invoke these tools via `tool_call` (e.g. `tool_call(name='agent_teams_update_task', arguments={...})`) after checking `tool_search` if needed. "
+    "Your coordination tools are `agent_teams_update_task` (always passing `teamId`, `taskId`, your current `attemptId`, `status`, and `output`), "
+    "`agent_teams_send_message` (requires `teamId`, `to`, `content`), `agent_teams_status` (requires `teamId`), and `agent_teams_claim_task`. "
+    "IMPORTANT: Your assigned task is ALREADY claimed when your turn starts — do NOT call `agent_teams_claim_task` for it. "
+    "TOOL CALLING: Direct tools (`read_file`, `search_files`, `terminal`, `execute_code`, `skills_list`, `skill_view`, `tool_describe`, etc.) "
+    "must be called DIRECTLY, never inside `tool_call`. "
+    "If Hermes Progressive Tool Disclosure (`tool_search` / `tool_call`) defers `agent_teams_*` tools, invoke them via `tool_call` using "
+    "`calls=[{\"name\": \"agent_teams_update_task\", \"arguments\": {\"teamId\": \"...\", \"taskId\": \"...\", \"attemptId\": \"...\", \"status\": \"completed\", \"output\": \"...\"}}]`. "
     "If any required `agent_teams_*` tool is genuinely unavailable, stop immediately and report the exact error instead of burning turns. "
     "Do not call captain-only tools, and strictly obey your tool policy (e.g. readonly reviewers must never write or patch files). "
     "When your task finishes, record the result with `agent_teams_update_task` and notify `captain` or downstream teammates via `agent_teams_send_message`."

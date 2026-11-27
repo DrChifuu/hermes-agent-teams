@@ -47,13 +47,53 @@ def _resolve_session_id(ctx: Any, kwargs: dict[str, Any]) -> str:
     return "hermes-default-session"
 
 
-def _resolve_captain_route(kwargs: dict[str, Any]) -> tuple[str | None, str | None, str | None]:
+def _lookup_session_model_from_db(session_id: str) -> tuple[str | None, str | None]:
+    """Best-effort lookup of `(provider, model)` from Hermes's SQLite state.db when `parent_agent` is absent."""
+    sid = (session_id or "").strip()
+    if not sid:
+        return (None, None)
+    try:
+        import sqlite3
+
+        hermes_home = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
+        db_path = Path(hermes_home) / "state.db"
+        if not db_path.is_file():
+            return (None, None)
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1.0)
+        try:
+            row = con.execute(
+                "SELECT billing_provider, model FROM sessions WHERE id = ? LIMIT 1",
+                (sid,),
+            ).fetchone()
+            if row:
+                prov = str(row[0]).strip() if row[0] else None
+                mod = str(row[1]).strip() if row[1] else None
+                return (prov or None, mod or None)
+        finally:
+            con.close()
+    except Exception:  # noqa: BLE001
+        pass
+    return (None, None)
+
+
+def _resolve_captain_route(
+    kwargs: dict[str, Any],
+    *,
+    bridge: SubagentBridge | None = None,
+    session_id: str = "",
+) -> tuple[str | None, str | None, str | None]:
     parent = kwargs.get("parent_agent")
-    if parent is None:
-        return (None, None, None)
-    provider = getattr(parent, "provider", None) or getattr(parent, "api_provider", None)
-    model = getattr(parent, "model", None)
-    effort = getattr(parent, "reasoning_effort", None)
+    if parent is None and bridge is not None:
+        parent = bridge.get_captain_agent(session_id)
+    provider = getattr(parent, "provider", None) or getattr(parent, "api_provider", None) if parent is not None else None
+    model = getattr(parent, "model", None) if parent is not None else None
+    effort = getattr(parent, "reasoning_effort", None) if parent is not None else None
+    if not model and session_id:
+        db_prov, db_model = _lookup_session_model_from_db(session_id)
+        if not provider and db_prov:
+            provider = db_prov
+        if not model and db_model:
+            model = db_model
     return (
         str(provider) if provider else None,
         str(model) if model else None,
@@ -137,7 +177,9 @@ def register(ctx: Any) -> None:
 
             if tool_name == "agent_teams_create":
                 payload.setdefault("captainSessionId", session_id)
-                cap_provider, cap_model, cap_effort = _resolve_captain_route(kwargs)
+                cap_provider, cap_model, cap_effort = _resolve_captain_route(
+                    kwargs, bridge=bridge, session_id=session_id
+                )
                 if cap_provider:
                     payload.setdefault("captainProvider", cap_provider)
                 if cap_model:
@@ -145,7 +187,9 @@ def register(ctx: Any) -> None:
                 if cap_effort:
                     payload.setdefault("captainReasoningEffort", cap_effort)
             elif tool_name in {"agent_teams_add_member", "agent_teams_edit_plan"}:
-                cap_provider, cap_model, cap_effort = _resolve_captain_route(kwargs)
+                cap_provider, cap_model, cap_effort = _resolve_captain_route(
+                    kwargs, bridge=bridge, session_id=session_id
+                )
                 if cap_provider:
                     payload.setdefault("captainProvider", cap_provider)
                 if cap_model:

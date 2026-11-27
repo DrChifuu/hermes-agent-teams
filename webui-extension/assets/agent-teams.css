@@ -1368,6 +1368,132 @@
   overflow-y: auto;
 }
 
+/* Inline Chat Banner (staged plan / active team quick-open) */
+.hat-chat-banner {
+  margin: 0 auto 8px;
+  width: min(760px, calc(100% - 24px));
+  z-index: 5;
+}
+
+.hat-chat-banner-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--hat-rust) 45%, var(--hat-border));
+  background: color-mix(in srgb, var(--hat-rust-soft) 55%, var(--hat-bg2));
+  cursor: pointer;
+  transition: border-color 140ms ease, transform 120ms ease, background 140ms ease;
+}
+
+.hat-chat-banner.is-running .hat-chat-banner-main {
+  border-color: var(--hat-border2);
+  background: var(--hat-bg2);
+}
+
+.hat-chat-banner-main:hover {
+  border-color: var(--hat-rust);
+  transform: translateY(-1px);
+}
+
+.hat-chat-banner-img {
+  width: 38px;
+  height: 38px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.hat-chat-banner-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.hat-chat-banner-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+}
+
+.hat-chat-banner-title {
+  font-weight: 700;
+  color: var(--hat-strong);
+}
+
+.hat-chat-banner-name {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  color: var(--hat-rust-hi);
+}
+
+.hat-chat-banner-tasks {
+  font-size: 11px;
+  color: var(--hat-muted);
+}
+
+.hat-chat-banner-models {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.hat-chat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--hat-border);
+  background: var(--hat-bg);
+  color: var(--hat-text);
+  font-size: 11px;
+  max-width: 100%;
+}
+
+.hat-chat-chip.is-captain {
+  border-color: color-mix(in srgb, var(--hat-rust) 50%, var(--hat-border));
+}
+
+.hat-chat-banner-cta {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.hat-plan-captain {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--hat-rust) 40%, var(--hat-border));
+  background: var(--hat-bg2);
+}
+
+.hat-plan-captain-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.hat-model-pending {
+  opacity: 0.65;
+  font-style: italic;
+}
+
+@media (max-width: 640px) {
+  .hat-chat-banner-main {
+    flex-wrap: wrap;
+  }
+  .hat-chat-banner-cta {
+    width: 100%;
+    text-align: center;
+  }
+}
+
 @keyframes hatPulse {
   0%, 100% { opacity: 0.45; }
   50% { opacity: 1; }

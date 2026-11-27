@@ -11,10 +11,16 @@
 
   let cachedCatalog = null;
 
-  async function loadHermesModelCatalog() {
+  function getAppBasePath() {
+    const path = (window.location.pathname || '/').replace(/\/session\/[^/?#]+.*$/, '');
+    return path.endsWith('/') ? path : `${path}/`;
+  }
+
+  async function loadHermesModelCatalog(basePath) {
     if (cachedCatalog) return cachedCatalog;
     try {
-      const resp = await fetch('api/models', { credentials: 'same-origin' });
+      const base = basePath || getAppBasePath();
+      const resp = await fetch(`${base}api/models`, { credentials: 'same-origin' });
       if (!resp.ok) return [];
       const data = await resp.json();
       const out = [];
@@ -83,13 +89,37 @@
       }
     }
 
-    loadHermesModelCatalog().then((catalog) => {
+    loadHermesModelCatalog(opts.appBasePath).then((catalog) => {
       function paint() {
+        const captainRoute = (opts.captainRoute || '').trim();
+        const shortCap = captainRoute && window.HermesTeamsDag
+          ? window.HermesTeamsDag.shortModel(captainRoute)
+          : captainRoute;
+        const inheritLabel = shortCap
+          ? `${tr('inheritCaptainModel')} (${shortCap})`
+          : tr('inheritCaptainModel');
+
+        const captainRowHtml = `
+          <div class="hat-plan-captain">
+            <img class="hat-plan-avatar" src="${esc(art.LEAD_ART)}" alt="${esc(tr('captain'))}" />
+            <div class="hat-plan-captain-info">
+              <div class="hat-member-top">
+                <span class="hat-member-name">${esc(tr('captain'))}</span>
+                <span class="hat-member-role">${esc(tr('captainSub'))}</span>
+                ${
+                  shortCap
+                    ? `<span class="hat-model-pill hat-captain-model" title="${esc(captainRoute)}">${esc(shortCap)}</span>`
+                    : `<span class="hat-model-pill hat-model-pending">${esc(tr('modelDetecting'))}</span>`
+                }
+              </div>
+            </div>
+          </div>`;
+
         const memberRows = draft.members
           .map((m, idx) => {
             const currentVal = m.model ? `${m.provider || ''}::${m.model}` : '';
             const options = [
-              `<option value="">${esc(tr('inheritCaptainModel'))}</option>`,
+              `<option value="">${esc(inheritLabel)}</option>`,
               ...catalog.map(
                 (c) =>
                   `<option value="${esc(c.value)}"${c.value === currentVal ? ' selected' : ''}>${esc(c.label)}</option>`
@@ -150,10 +180,10 @@
 
             <div class="hat-plan-section">
               <div class="hat-plan-section-head">
-                <span>${esc(tr('roster'))} (${draft.members.length})</span>
+                <span>${esc(tr('roster'))} (${draft.members.length + 1})</span>
                 <button type="button" class="hat-btn-ghost" data-action="add-member">+ ${esc(tr('addMember'))}</button>
               </div>
-              <div class="hat-plan-list">${memberRows}</div>
+              <div class="hat-plan-list">${captainRowHtml}${memberRows}</div>
             </div>
 
             <div class="hat-plan-section">

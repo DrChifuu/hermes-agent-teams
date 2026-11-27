@@ -40,6 +40,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/plan/discard", post(plan_discard_handler))
         .route("/api/v1/team/halt", post(team_halt_handler))
         .route("/api/v1/team/resume", post(team_resume_handler))
+        .route("/api/v1/team/delete", post(team_delete_handler))
         .with_state(state)
 }
 
@@ -646,6 +647,36 @@ async fn team_resume_handler(
     state.enqueue_directives(&ws, out.directives.clone());
     state.publish_event(&ws, Some(out.team.id.clone()), "team_resumed");
     Ok(Json(serde_json::to_value(out)?))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TeamDeleteBody {
+    #[serde(default)]
+    workspace: Option<String>,
+    team_id: String,
+    #[serde(default)]
+    archived: bool,
+}
+
+async fn team_delete_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<TeamDeleteBody>,
+) -> Result<Json<Value>, ApiError> {
+    verify_request_auth(state.auth_mode(), &headers)?;
+    let ws = state.resolve_workspace_for_team(body.workspace.as_deref(), &body.team_id);
+    let directives = state.with_engine(&ws, |engine| {
+        engine.purge_team(&body.team_id, body.archived)
+    })?;
+    state.enqueue_directives(&ws, directives);
+    state.clear_team_activity(&body.team_id);
+    state.publish_event(&ws, Some(body.team_id.clone()), "team_deleted");
+    Ok(Json(json!({
+        "ok": true,
+        "deleted": body.team_id,
+        "archived": body.archived,
+    })))
 }
 
 fn extract_str(val: &Value, camel: &str, snake: &str) -> Result<String, ApiError> {

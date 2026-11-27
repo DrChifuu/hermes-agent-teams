@@ -452,14 +452,50 @@ impl TeamEngine {
         if let Some(desc) = input.description {
             team.description = Some(desc);
         }
+        if team.captain_provider.is_none() {
+            if let Some(ref cp) = input.captain_provider {
+                if !cp.trim().is_empty() {
+                    team.captain_provider = Some(cp.clone());
+                }
+            }
+        }
+        if team.captain_model.is_none() {
+            if let Some(ref cm) = input.captain_model {
+                if !cm.trim().is_empty() {
+                    team.captain_model = Some(cm.clone());
+                }
+            }
+        }
+        if team.captain_reasoning_effort.is_none() {
+            if let Some(ref ce) = input.captain_reasoning_effort {
+                if !ce.trim().is_empty() {
+                    team.captain_reasoning_effort = Some(ce.clone());
+                }
+            }
+        }
         if let Some(members) = input.members {
             team.members.clear();
+            let eff_provider = input
+                .captain_provider
+                .as_deref()
+                .or(team.captain_provider.as_deref());
+            let eff_model = input
+                .captain_model
+                .as_deref()
+                .or(team.captain_model.as_deref());
+            let eff_effort = input
+                .captain_reasoning_effort
+                .as_deref()
+                .or(team.captain_reasoning_effort.as_deref());
+            let eff_provider_owned = eff_provider.map(ToString::to_string);
+            let eff_model_owned = eff_model.map(ToString::to_string);
+            let eff_effort_owned = eff_effort.map(ToString::to_string);
             self.apply_plan_members(
                 &mut team,
                 members,
-                input.captain_provider.as_deref(),
-                input.captain_model.as_deref(),
-                input.captain_reasoning_effort.as_deref(),
+                eff_provider_owned.as_deref(),
+                eff_model_owned.as_deref(),
+                eff_effort_owned.as_deref(),
             )?;
         }
         if let Some(tasks) = input.tasks {
@@ -1449,6 +1485,30 @@ impl TeamEngine {
             ),
         });
         Ok(out)
+    }
+
+    /// Permanently delete an active or archived team from disk (cancelling any active members first).
+    pub fn purge_team(&self, team_id: &str, archived: bool) -> Result<Vec<EngineDirective>> {
+        if archived {
+            self.store.delete_archived_team(team_id)?;
+            return Ok(Vec::new());
+        }
+        let team = self.store.load_team(team_id)?;
+        let captain_sid = team.captain_session_id.clone();
+        let mut directives = Vec::new();
+        for member in &team.members {
+            if member.status != MemberStatus::Removed && !member.id.is_empty() {
+                directives.push(EngineDirective::CancelMember {
+                    team_id: team.id.clone(),
+                    captain_session_id: captain_sid.clone(),
+                    member_name: member.name.clone(),
+                    subagent_id: member.id.clone(),
+                    reason: "team deleted permanently by user".to_string(),
+                });
+            }
+        }
+        self.store.delete_active_team(team_id)?;
+        Ok(directives)
     }
 
     fn apply_plan_members(

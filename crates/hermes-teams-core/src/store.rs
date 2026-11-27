@@ -145,6 +145,72 @@ impl TeamStore {
         Ok(dst)
     }
 
+    /// Permanently remove an active team directory (`<state_root>/<teamId>/`).
+    pub fn delete_active_team(&self, team_id: &str) -> Result<()> {
+        validate_safe_id(team_id)?;
+        let dir = self.team_dir(team_id);
+        if !dir.is_dir() {
+            return Err(TeamsError::TeamNotFound(team_id.to_string()));
+        }
+        fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    /// Permanently remove an archived team directory under `<state_root>/archive/`.
+    /// Matches either the direct folder `<teamId>` or any archive folder whose `team.json` has `id == teamId`.
+    pub fn delete_archived_team(&self, team_id: &str) -> Result<()> {
+        validate_safe_id(team_id)?;
+        let direct = self.archive_dir(team_id);
+        if direct.is_dir() {
+            fs::remove_dir_all(&direct)?;
+            return Ok(());
+        }
+        let arch_root = self.archive_root();
+        if arch_root.is_dir() {
+            for entry in fs::read_dir(&arch_root)? {
+                let entry = entry?;
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                let tf = path.join("team.json");
+                if tf.is_file() {
+                    if let Ok(raw) = fs::read(&tf) {
+                        if let Ok(team) = serde_json::from_slice::<TeamState>(&raw) {
+                            if team.id == team_id {
+                                fs::remove_dir_all(&path)?;
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(TeamsError::TeamNotFound(team_id.to_string()))
+    }
+
+    /// Check whether an archived team with `team_id` exists in this store.
+    pub fn has_archived_team(&self, team_id: &str) -> bool {
+        if self.archive_dir(team_id).join("team.json").is_file() {
+            return true;
+        }
+        let arch_root = self.archive_root();
+        let Ok(entries) = fs::read_dir(&arch_root) else {
+            return false;
+        };
+        for entry in entries.flatten() {
+            let tf = entry.path().join("team.json");
+            if let Ok(raw) = fs::read(&tf) {
+                if let Ok(team) = serde_json::from_slice::<TeamState>(&raw) {
+                    if team.id == team_id {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Append one message to `<team>/inbox/<to>.jsonl`.
     pub fn append_message(&self, team_id: &str, msg: &TeamMessage) -> Result<()> {
         let inbox = self.inbox_dir(team_id);
@@ -233,6 +299,22 @@ impl TeamStore {
                 .count()
         })
     }
+}
+
+fn validate_safe_id(team_id: &str) -> Result<()> {
+    let clean = team_id.trim();
+    if clean.is_empty()
+        || clean == "."
+        || clean == ".."
+        || clean.contains('/')
+        || clean.contains('\\')
+        || clean.contains('\0')
+    {
+        return Err(TeamsError::InvalidInput(format!(
+            "invalid team id '{team_id}'"
+        )));
+    }
+    Ok(())
 }
 
 fn read_jsonl(path: &Path) -> Result<Vec<TeamMessage>> {

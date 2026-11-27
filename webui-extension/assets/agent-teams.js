@@ -48,6 +48,13 @@
       unassigned: 'sin asignar',
       stopTeam: 'Detener equipo',
       confirmStop: '¿Confirmar detención?',
+      deleteTeam: 'Eliminar',
+      confirmDelete: '¿Confirmar borrado?',
+      modelDetecting: 'detectando modelo…',
+      chatPlanReady: 'Esquema de equipo listo para aprobar',
+      chatReviewApprove: 'Revisar y aprobar',
+      chatOpenTeam: 'Abrir panel',
+      chatTeamRunning: 'Equipo activo en esta sesión',
       stagedBannerTitle: 'Plan en borrador — revisa antes de ejecutar',
       stagedBannerDesc: 'Ajusta roles, modelos de Hermes o dependencias y pulsa Aprobar y ejecutar.',
       awaitingFeedbackHint: 'Esperando tus cambios en el chat. El Capitán actualizará este mismo borrador.',
@@ -115,6 +122,13 @@
       unassigned: 'unassigned',
       stopTeam: 'Stop team',
       confirmStop: 'Confirm stop?',
+      deleteTeam: 'Delete',
+      confirmDelete: 'Confirm delete?',
+      modelDetecting: 'detecting model…',
+      chatPlanReady: 'Team plan ready for approval',
+      chatReviewApprove: 'Review & Approve',
+      chatOpenTeam: 'Open panel',
+      chatTeamRunning: 'Active team in this session',
       stagedBannerTitle: 'Staged Plan — Review before running',
       stagedBannerDesc: 'Adjust roles, Hermes models, or dependencies and click Approve & Run.',
       awaitingFeedbackHint: 'Waiting for your feedback in chat. Captain will revise this same draft.',
@@ -221,6 +235,7 @@
     dagExpanded: false,
     liveMemberFilter: 'all',
     stopArmed: false,
+    deleteArmed: false,
     editorDirty: false,
     lastSessionId: '',
     lastPayloadSig: '',
@@ -286,28 +301,62 @@
     throw lastErr || new Error('hermes-teamsd unreachable');
   }
 
+  function readWebUiSessionRoute(sid) {
+    try {
+      const globalS = typeof S !== 'undefined' ? S : window.S;
+      if (!globalS) return null;
+      const cur = globalS.session;
+      if (cur && (!sid || String(cur.session_id || '').trim() === sid)) {
+        const m = String(cur.model || cur.resolved_model || cur.last_used_model || '').trim();
+        const p = String(cur.model_provider || cur.provider || '').trim();
+        if (m) return { provider: p, model: m };
+      }
+      if (sid && Array.isArray(globalS.sessions)) {
+        const match = globalS.sessions.find((x) => x && String(x.session_id || '').trim() === sid);
+        if (match) {
+          const m = String(match.model || match.last_used_model || '').trim();
+          const p = String(match.model_provider || match.provider || '').trim();
+          if (m) return { provider: p, model: m };
+        }
+      }
+    } catch (_e) {}
+    return null;
+  }
+
   async function ensureCaptainRoute(team) {
     if (!team) return;
     if (team.captainModel) return;
-    const sid = team.captainSessionId || detectCurrentSessionId();
-    if (!sid || uiState.captainRoutes[sid]) return;
-    uiState.captainRoutes[sid] = { provider: '', model: '', fetched: false };
+    const sid = String(team.captainSessionId || detectCurrentSessionId() || '').trim();
+    if (!sid) return;
+    const existing = uiState.captainRoutes[sid];
+    if (existing && (existing.model || existing.inFlight || (existing.fetchedAt && Date.now() - existing.fetchedAt < 5000))) {
+      return;
+    }
+    const fromMem = readWebUiSessionRoute(sid);
+    if (fromMem && fromMem.model) {
+      uiState.captainRoutes[sid] = { provider: fromMem.provider, model: fromMem.model, inFlight: false, fetchedAt: Date.now() };
+      return;
+    }
+    uiState.captainRoutes[sid] = { provider: '', model: '', inFlight: true, fetchedAt: Date.now() };
     try {
       const res = await fetch(
         `${getAppBasePath()}api/session?session_id=${encodeURIComponent(sid)}&messages=0&resolve_model=1`,
         { credentials: 'same-origin' }
       );
-      if (!res.ok) return;
+      if (!res.ok) {
+        uiState.captainRoutes[sid] = { provider: '', model: '', inFlight: false, fetchedAt: Date.now() };
+        return;
+      }
       const body = await res.json();
       const sess = (body && body.session) || body || {};
-      const model = String(sess.model || sess.resolved_model || '').trim();
+      const model = String(sess.model || sess.resolved_model || sess.last_used_model || '').trim();
       const provider = String(sess.model_provider || sess.provider || '').trim();
-      uiState.captainRoutes[sid] = { provider, model, fetched: true };
-      if (model && uiState.open) {
+      uiState.captainRoutes[sid] = { provider, model, inFlight: false, fetchedAt: Date.now() };
+      if (model) {
         render();
       }
     } catch (_err) {
-      uiState.captainRoutes[sid] = { provider: '', model: '', fetched: true };
+      uiState.captainRoutes[sid] = { provider: '', model: '', inFlight: false, fetchedAt: Date.now() };
     }
   }
 
@@ -316,10 +365,14 @@
     if (team.captainModel) {
       return formatRoute(team.captainProvider, team.captainModel);
     }
-    const sid = team.captainSessionId || detectCurrentSessionId();
+    const sid = String(team.captainSessionId || detectCurrentSessionId() || '').trim();
     const cached = sid && uiState.captainRoutes[sid];
     if (cached && cached.model) {
       return formatRoute(cached.provider, cached.model);
+    }
+    const fromMem = readWebUiSessionRoute(sid);
+    if (fromMem && fromMem.model) {
+      return formatRoute(fromMem.provider, fromMem.model);
     }
     return '';
   }
@@ -378,6 +431,9 @@
       }
 
       const activeTeam = currentTeam();
+      (uiState.payload.teams || []).forEach((t) => {
+        void ensureCaptainRoute(t);
+      });
       if (activeTeam) {
         void ensureCaptainRoute(activeTeam);
       }
@@ -447,8 +503,103 @@
   panel.id = 'hermes-agent-teams-panel';
   panel.hidden = true;
 
+  const chatBanner = document.createElement('div');
+  chatBanner.className = 'hat-chat-banner';
+  chatBanner.id = 'hermes-agent-teams-chat-banner';
+  chatBanner.hidden = true;
+
   document.body.appendChild(badge);
   document.body.appendChild(panel);
+
+  function mountChatBanner() {
+    const mainChat = document.getElementById('mainChat');
+    const composerWrap = document.getElementById('composerWrap');
+    if (mainChat && composerWrap && composerWrap.parentNode === mainChat) {
+      if (chatBanner.parentNode !== mainChat || chatBanner.nextSibling !== composerWrap) {
+        mainChat.insertBefore(chatBanner, composerWrap);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  function renderChatBanner() {
+    if (!mountChatBanner()) {
+      chatBanner.hidden = true;
+      return;
+    }
+    const sid = detectCurrentSessionId();
+    const activeTeams = uiState.payload.teams || [];
+    const sessionTeams = sid
+      ? activeTeams.filter((t) => !t.archived && String(t.captainSessionId || '').trim() === sid)
+      : [];
+    const stagedTeam = sessionTeams.find((t) => t.phase === 'staged');
+    const runningTeam = sessionTeams.find((t) => !t.halted && t.phase !== 'staged');
+    const target = stagedTeam || (!uiState.open ? runningTeam : null);
+    if (!target) {
+      chatBanner.hidden = true;
+      return;
+    }
+
+    const art = window.HermesTeamsArtwork;
+    const isStaged = target.phase === 'staged';
+    const meta = statusMeta(target);
+    const stats = target.stats || {};
+    const captainRoute = resolveCaptainRoute(target);
+    const shortCap = captainRoute ? window.HermesTeamsDag.shortModel(captainRoute) : tr('modelDetecting');
+    const modelChips = [
+      `<span class="hat-chat-chip is-captain" title="${esc(captainRoute || '')}"><strong>${esc(tr('captain'))}:</strong> ${esc(shortCap)}</span>`,
+      ...(target.members || []).map((m) => {
+        const effRoute = formatRoute(m.provider, m.model) || captainRoute;
+        const shortM = effRoute ? window.HermesTeamsDag.shortModel(effRoute) : tr('modelDetecting');
+        return `<span class="hat-chat-chip" title="${esc(effRoute || '')}"><strong>${esc(m.name)}:</strong> ${esc(shortM)}</span>`;
+      }),
+    ].join('');
+
+    chatBanner.hidden = false;
+    chatBanner.className = `hat-chat-banner${isStaged ? ' is-staged' : ' is-running'}`;
+    chatBanner.innerHTML = `
+      <div class="hat-chat-banner-main" role="button" tabindex="0" data-action="open-chat-team">
+        <img class="hat-chat-banner-img" src="${esc(art.LEAD_ART)}" alt="Captain Ferris" />
+        <div class="hat-chat-banner-body">
+          <div class="hat-chat-banner-top">
+            <span class="hat-chat-banner-title">${esc(isStaged ? tr('chatPlanReady') : tr('chatTeamRunning'))}</span>
+            <span class="hat-chat-banner-name">${esc(target.name)}</span>
+            <span class="hat-status-pill ${meta.cls}">${esc(meta.label)}</span>
+            <span class="hat-chat-banner-tasks">${stats.completed || 0}/${stats.total || (target.tasks || []).length} ${esc(tr('tasks'))}</span>
+          </div>
+          <div class="hat-chat-banner-models">${modelChips}</div>
+        </div>
+        <button type="button" class="${isStaged ? 'hat-btn-primary' : 'hat-btn-secondary'} hat-chat-banner-cta" data-action="open-chat-team">
+          ${esc(isStaged ? tr('chatReviewApprove') : tr('chatOpenTeam'))} 🦀
+        </button>
+      </div>`;
+
+    const openTarget = () => {
+      uiState.open = true;
+      uiState._userClosed = false;
+      uiState.tab = 'active';
+      uiState.selectedTeamId = target.id;
+      uiState.deleteArmed = false;
+      uiState.stopArmed = false;
+      render();
+      void refreshState(true);
+    };
+    chatBanner.querySelectorAll('[data-action="open-chat-team"]').forEach((el) => {
+      el.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        openTarget();
+      });
+      if (el.getAttribute('role') === 'button') {
+        el.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter' || ev.key === ' ') {
+            ev.preventDefault();
+            openTarget();
+          }
+        });
+      }
+    });
+  }
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && uiState.selectedTaskId) {
@@ -527,6 +678,7 @@
 
     panel.hidden = !uiState.open;
     panel.classList.toggle('is-floating', uiState.floating);
+    renderChatBanner();
     if (!uiState.open) return;
 
     const team = currentTeam();
@@ -568,6 +720,13 @@
               showStop
                 ? `<button type="button" class="hat-icon-btn is-danger" data-action="stop">${esc(
                     uiState.stopArmed ? tr('confirmStop') : tr('stopTeam')
+                  )}</button>`
+                : ''
+            }
+            ${
+              team
+                ? `<button type="button" class="hat-icon-btn is-danger" data-action="delete" title="${esc(tr('deleteTeam'))}">🗑 ${esc(
+                    uiState.deleteArmed ? tr('confirmDelete') : tr('deleteTeam')
                   )}</button>`
                 : ''
             }
@@ -632,6 +791,8 @@
     if (team.phase === 'staged' && !team.archived) {
       window.HermesTeamsPlanEditor.renderPlanEditor(body, team, {
         tr,
+        captainRoute: resolveCaptainRoute(team),
+        appBasePath: getAppBasePath(),
         onDirtyChange: (isDirty) => {
           uiState.editorDirty = !!isDirty;
         },
@@ -698,7 +859,7 @@
       .map((m) => {
         const imgUrl = art.memberArtUrl(m.name, m.role);
         const actionImg = art.actionArtUrl(allDone ? 'celebrating' : m.activity || 'idle');
-        const route = formatRoute(m.provider, m.model);
+        const route = formatRoute(m.provider, m.model) || captainRoute;
         const chips = (m.assignedTaskIds || [])
           .map((tid) => {
             const taskObj = tasks.find((x) => x.id === tid);
@@ -741,12 +902,12 @@
               <div class="hat-captain-title">
                 <span>${esc(tr('captain'))}</span>
                 <span class="hat-member-role">${esc(tr('captainSub'))}</span>
+                ${
+                  captainRoute
+                    ? `<span class="hat-model-pill hat-captain-model" title="${esc(captainRoute)}">${esc(window.HermesTeamsDag.shortModel(captainRoute))}</span>`
+                    : `<span class="hat-model-pill hat-model-pending">${esc(tr('modelDetecting'))}</span>`
+                }
               </div>
-              ${
-                captainRoute
-                  ? `<div class="hat-captain-model-row"><span class="hat-model-pill hat-captain-model" title="${esc(captainRoute)}">${esc(window.HermesTeamsDag.shortModel(captainRoute))}</span></div>`
-                  : ''
-              }
               <div class="hat-captain-sub">
                 ${stats.total} ${esc(tr('tasks'))} · ${stats.memberCount} ${esc(tr('members'))}
               </div>
@@ -907,7 +1068,11 @@
               <div class="hat-live-card-id">
                 <div class="hat-member-top">
                   <span class="hat-member-name">${esc(tr('captain'))}</span>
-                  ${captainRoute ? `<span class="hat-model-pill" title="${esc(captainRoute)}">${esc(window.HermesTeamsDag.shortModel(captainRoute))}</span>` : ''}
+                  ${
+                    captainRoute
+                      ? `<span class="hat-model-pill" title="${esc(captainRoute)}">${esc(window.HermesTeamsDag.shortModel(captainRoute))}</span>`
+                      : `<span class="hat-model-pill hat-model-pending">${esc(tr('modelDetecting'))}</span>`
+                  }
                 </div>
                 <div class="hat-live-sub-id">${esc(team.captainSessionId || 'session')}</div>
               </div>
@@ -920,7 +1085,7 @@
       })(),
       ...members.map((m) => {
         const rt = runtimeByName.get(m.name);
-        const route = formatRoute(m.provider, m.model);
+        const route = formatRoute(m.provider, m.model) || captainRoute;
         const effectiveState = (rt && rt.state) || (m.spawnError ? 'failed' : m.activity === 'working' ? 'running' : 'idle');
         const pill = stateLabel(effectiveState);
         const imgUrl = art.memberArtUrl(m.name, m.role);
@@ -1068,6 +1233,8 @@
         }
         uiState.selectedTaskId = null;
         uiState.editorDirty = false;
+        uiState.stopArmed = false;
+        uiState.deleteArmed = false;
         render();
         if (uiState.tab === 'live') {
           void refreshActivity(currentTeam(), false);
@@ -1080,6 +1247,8 @@
         uiState.selectedTeamId = switcher.value || null;
         uiState.selectedTaskId = null;
         uiState.editorDirty = false;
+        uiState.stopArmed = false;
+        uiState.deleteArmed = false;
         render();
         if (uiState.tab === 'live') {
           void refreshActivity(currentTeam(), false);
@@ -1095,6 +1264,7 @@
           return;
         }
         uiState.stopArmed = false;
+        uiState.deleteArmed = false;
         await apiFetch('/api/v1/team/halt', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1104,6 +1274,30 @@
             reason: 'Stopped from Hermes WebUI',
           }),
         });
+        await refreshState(true);
+      });
+    }
+    const deleteBtn = panel.querySelector('[data-action="delete"]');
+    if (deleteBtn && team) {
+      deleteBtn.addEventListener('click', async () => {
+        if (!uiState.deleteArmed) {
+          uiState.deleteArmed = true;
+          uiState.stopArmed = false;
+          render();
+          return;
+        }
+        uiState.deleteArmed = false;
+        await apiFetch('/api/v1/team/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            teamId: team.id,
+            workspace: team.workspace,
+            archived: !!team.archived,
+          }),
+        });
+        uiState.selectedTeamId = null;
+        uiState.selectedTaskId = null;
         await refreshState(true);
       });
     }

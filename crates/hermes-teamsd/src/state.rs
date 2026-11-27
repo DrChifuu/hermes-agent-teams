@@ -228,9 +228,7 @@ impl AppState {
         }
         for candidate in self.known_workspaces() {
             let store = TeamStore::for_workspace(&candidate, Some(&self.0.config.state_dir));
-            if store.team_file(team_id).is_file()
-                || store.archive_dir(team_id).join("team.json").is_file()
-            {
+            if store.team_file(team_id).is_file() || store.has_archived_team(team_id) {
                 return candidate;
             }
         }
@@ -420,6 +418,8 @@ impl AppState {
                     entry.last_summary = Some(summary);
                     if is_err_status {
                         entry.error = error.or(detail);
+                    } else {
+                        entry.error = None;
                     }
                 }
                 "blocked" => {
@@ -485,5 +485,15 @@ impl AppState {
             .cloned()
             .collect();
         (members, events)
+    }
+
+    pub fn clear_team_activity(&self, team_id: &str) {
+        let mut guard = self
+            .0
+            .activity
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.events.remove(team_id);
+        guard.runtime.retain(|(tid, _), _| tid != team_id);
     }
 }

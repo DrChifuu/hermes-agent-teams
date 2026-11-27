@@ -289,6 +289,12 @@ class SubagentBridge:
                         self._captain_agents.pop(oldest, None)
             self._last_captain_agent = parent_agent
 
+    def get_captain_agent(self, session_id: str) -> Any:
+        with self._lock:
+            if session_id and session_id in self._captain_agents:
+                return self._captain_agents[session_id]
+            return self._last_captain_agent
+
     def _get_parent_agent(self, captain_session_id: str, workspace: str) -> Any:
         # Prefer the stored root Captain agent (depth == 0), never a delegated leaf child!
         with self._lock:
@@ -666,9 +672,14 @@ class SubagentBridge:
         message = str(d.get("message") or "").strip()
         if not message:
             return
+        captain_sid = str(d.get("captain_session_id") or d.get("captainSessionId") or "").strip()
         try:
-            if callable(getattr(self.ctx, "inject_message", None)):
-                self.ctx.inject_message(message)
+            inject = getattr(self.ctx, "inject_message", None)
+            if callable(inject):
+                if captain_sid:
+                    inject(message, session_key=captain_sid)
+                else:
+                    inject(message)
             elif callable(getattr(self.ctx, "post_message", None)):
                 self.ctx.post_message(message)
         except Exception as exc:  # noqa: BLE001
