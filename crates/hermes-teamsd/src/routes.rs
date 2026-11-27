@@ -11,7 +11,8 @@ use hermes_teams_core::operations::{
     AddMemberInput, AmendTaskInput, CreateTaskInput, CreateTeamInput, EditPlanInput,
     ReassignTaskInput, SendMessageInput, UpdateTaskInput,
 };
-use hermes_teams_core::{collect_workspace_activity, TeamsError, WorkspaceActivityPayload};
+use hermes_teams_core::snapshot::collect_workspace_activity_opts;
+use hermes_teams_core::{TeamsError, WorkspaceActivityPayload};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::convert::Infallible;
@@ -72,6 +73,8 @@ struct StateQuery {
     workspace: Option<String>,
     #[serde(default)]
     session_id: Option<String>,
+    #[serde(default)]
+    include_archived: Option<String>,
 }
 
 async fn state_handler(
@@ -80,6 +83,11 @@ async fn state_handler(
     Query(q): Query<StateQuery>,
 ) -> Result<Json<WorkspaceActivityPayload>, ApiError> {
     verify_request_auth(state.auth_mode(), &headers)?;
+
+    let include_archived = !matches!(
+        q.include_archived.as_deref().map(str::trim),
+        Some("0" | "false" | "no")
+    );
 
     let workspaces: Vec<PathBuf> =
         if let Some(ws) = q.workspace.as_deref().filter(|s| !s.trim().is_empty()) {
@@ -91,13 +99,19 @@ async fn state_handler(
     let mut combined = WorkspaceActivityPayload {
         teams: Vec::new(),
         archived: Vec::new(),
+        archived_count: 0,
     };
     for ws in workspaces {
         let snap = state.with_engine(&ws, |engine| {
-            collect_workspace_activity(engine.store(), q.session_id.as_deref())
+            collect_workspace_activity_opts(
+                engine.store(),
+                q.session_id.as_deref(),
+                include_archived,
+            )
         });
         combined.teams.extend(snap.teams);
         combined.archived.extend(snap.archived);
+        combined.archived_count += snap.archived_count;
     }
 
     combined

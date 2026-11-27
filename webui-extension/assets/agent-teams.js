@@ -242,6 +242,8 @@
     lastActivitySig: '',
     apiBase: 'proxy',
     payload: { teams: [], archived: [] },
+    archivedCount: 0,
+    archivedLoaded: false,
     activity: { teamId: '', members: [], events: [] },
     captainRoutes: {}, // sessionId -> { provider, model, fetched }
     sse: null,
@@ -405,7 +407,7 @@
     }
   }
 
-  async function refreshState(forceRender) {
+  async function refreshState(forceRender, opts) {
     try {
       const sid = detectCurrentSessionId();
       if (sid && sid !== uiState.lastSessionId) {
@@ -415,13 +417,27 @@
         uiState.editorDirty = false;
         forceRender = true;
       }
-      // Fetch workspace-wide state so staged/running teams created in another session (e.g. Sol)
-      // are always visible in the panel & team switcher, while auto-selecting the active session's team.
-      const data = await apiFetch('/api/v1/state');
-      const nextPayload = data || { teams: [], archived: [] };
-      const nextSig = JSON.stringify(nextPayload);
+      const wantArchived = Boolean(
+        (opts && opts.includeArchived) || uiState.tab === 'archive'
+      );
+      // Lightweight polling (`include_archived=0`) avoids re-serializing all archived teams every 1.5s.
+      const data = await apiFetch(
+        wantArchived ? '/api/v1/state?include_archived=1' : '/api/v1/state?include_archived=0'
+      );
+      const nextTeams = (data && data.teams) || [];
+      const nextArchived = wantArchived
+        ? (data && data.archived) || []
+        : uiState.payload.archived || [];
+      const nextArchivedCount =
+        data && typeof data.archivedCount === 'number'
+          ? data.archivedCount
+          : nextArchived.length;
+      if (wantArchived) uiState.archivedLoaded = true;
+      const nextPayload = { teams: nextTeams, archived: nextArchived };
+      const nextSig = JSON.stringify({ teams: nextTeams, archivedCount: nextArchivedCount, archLen: nextArchived.length, archSig: wantArchived ? nextArchived : null });
       const changed = nextSig !== uiState.lastPayloadSig;
       uiState.payload = nextPayload;
+      uiState.archivedCount = nextArchivedCount;
       uiState.lastPayloadSig = nextSig;
 
       const autoOpen = extHandle && extHandle.settings ? extHandle.settings.get('auto_open_panel') : true;
@@ -747,7 +763,7 @@
           ${esc(tr('activeTab'))} (${activeTeams.length})
         </button>
         <button type="button" class="hat-tab${uiState.tab === 'archive' ? ' is-active' : ''}" data-tab="archive">
-          ${esc(tr('archiveTab'))} (${archivedTeams.length})
+          ${esc(tr('archiveTab'))} (${uiState.archivedCount || archivedTeams.length})
         </button>
         <button type="button" class="hat-tab hat-tab-live${uiState.tab === 'live' ? ' is-active' : ''}" data-tab="live">
           <span class="hat-live-dot${liveActiveCount > 0 ? ' is-busy' : ''}"></span>
@@ -1238,7 +1254,9 @@
         uiState.stopArmed = false;
         uiState.deleteArmed = false;
         render();
-        if (uiState.tab === 'live') {
+        if (uiState.tab === 'archive') {
+          void refreshState(true, { includeArchived: true });
+        } else if (uiState.tab === 'live') {
           void refreshActivity(currentTeam(), false);
         }
       });
@@ -1252,7 +1270,9 @@
         uiState.stopArmed = false;
         uiState.deleteArmed = false;
         render();
-        if (uiState.tab === 'live') {
+        if (uiState.tab === 'archive') {
+          void refreshState(true, { includeArchived: true });
+        } else if (uiState.tab === 'live') {
           void refreshActivity(currentTeam(), false);
         }
       });

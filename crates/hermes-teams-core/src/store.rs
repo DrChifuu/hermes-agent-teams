@@ -98,6 +98,18 @@ impl TeamStore {
         Self::scan_teams_in(&self.archive_root(), false)
     }
 
+    /// Fast count of archived teams without reading/parsing `team.json` or inbox files.
+    pub fn count_archived_teams(&self) -> usize {
+        let dir = self.archive_root();
+        let Ok(entries) = fs::read_dir(&dir) else {
+            return 0;
+        };
+        entries
+            .flatten()
+            .filter(|e| e.path().join("team.json").is_file())
+            .count()
+    }
+
     fn scan_teams_in(dir: &Path, skip_archive: bool) -> Result<Vec<TeamState>> {
         if !dir.is_dir() {
             return Ok(Vec::new());

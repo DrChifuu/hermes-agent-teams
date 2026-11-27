@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import queue
 import threading
 import time
 from typing import Any
@@ -135,6 +136,8 @@ class SubagentBridge:
         self._stop_event = threading.Event()
         self._poller: threading.Thread | None = None
         self._status_tick: int = 0
+        self._activity_queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=256)
+        self._activity_worker: threading.Thread | None = None
 
     def register_child_session(self, child_session_id: str, child_subagent_id: str) -> None:
         csid = (child_session_id or "").strip()
@@ -162,15 +165,48 @@ class SubagentBridge:
                     return (team_id, mname, ws, cand, tfilter)
         return None
 
-    def emit_activity_async(self, **kwargs: Any) -> None:
-        """Best-effort non-blocking telemetry push to local loopback hermes-teamsd."""
-        def _send() -> None:
+    def _ensure_activity_worker(self) -> None:
+        worker = self._activity_worker
+        if worker is not None and worker.is_alive():
+            return
+        with self._lock:
+            if self._activity_worker is not None and self._activity_worker.is_alive():
+                return
+            self._activity_worker = threading.Thread(
+                target=self._activity_loop,
+                name="hat-activity-worker",
+                daemon=True,
+            )
+            self._activity_worker.start()
+
+    def _activity_loop(self) -> None:
+        while not self._stop_event.is_set():
             try:
-                self.client.report_activity(**kwargs)
+                payload = self._activity_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                self.client.report_activity(**payload)
             except Exception:  # noqa: BLE001
                 pass
+            finally:
+                self._activity_queue.task_done()
 
-        threading.Thread(target=_send, name="hat-activity", daemon=True).start()
+    def emit_activity_async(self, **kwargs: Any) -> None:
+        """Non-blocking FIFO telemetry enqueue to a single persistent worker thread."""
+        self._ensure_activity_worker()
+        try:
+            self._activity_queue.put_nowait(kwargs)
+        except queue.Full:
+            try:
+                self._activity_queue.get_nowait()
+                self._activity_queue.task_done()
+            except queue.Empty:
+                pass
+            try:
+                self._activity_queue.put_nowait(kwargs)
+            except queue.Full:
+                pass
 
     @staticmethod
     def _extract_effective_tool_names(tool_name: str, args: Any) -> list[str]:

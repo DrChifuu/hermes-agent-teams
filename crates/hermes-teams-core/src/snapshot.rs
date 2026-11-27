@@ -111,6 +111,8 @@ pub struct TeamSnapshot {
 pub struct WorkspaceActivityPayload {
     pub teams: Vec<TeamSnapshot>,
     pub archived: Vec<TeamSnapshot>,
+    #[serde(default)]
+    pub archived_count: usize,
 }
 
 /// Build a `TeamSnapshot` from persisted `TeamState` + mailbox counters.
@@ -287,6 +289,15 @@ pub fn collect_workspace_activity(
     store: &TeamStore,
     session_id: Option<&str>,
 ) -> WorkspaceActivityPayload {
+    collect_workspace_activity_opts(store, session_id, true)
+}
+
+/// Collect active snapshots and optionally archived snapshots (or just a fast `archived_count` when `include_archived == false`).
+pub fn collect_workspace_activity_opts(
+    store: &TeamStore,
+    session_id: Option<&str>,
+    include_archived: bool,
+) -> WorkspaceActivityPayload {
     let filter_sid = session_id.map(str::trim).filter(|s| !s.is_empty());
 
     let teams = store
@@ -297,12 +308,25 @@ pub fn collect_workspace_activity(
         .map(|t| build_team_snapshot(store, &t, false))
         .collect();
 
-    let archived = store
-        .list_archived_teams()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|t| build_team_snapshot(store, &t, true))
-        .collect();
-
-    WorkspaceActivityPayload { teams, archived }
+    if include_archived {
+        let archived: Vec<TeamSnapshot> = store
+            .list_archived_teams()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| build_team_snapshot(store, &t, true))
+            .collect();
+        let archived_count = archived.len();
+        WorkspaceActivityPayload {
+            teams,
+            archived,
+            archived_count,
+        }
+    } else {
+        let archived_count = store.count_archived_teams();
+        WorkspaceActivityPayload {
+            teams,
+            archived: Vec::new(),
+            archived_count,
+        }
+    }
 }
