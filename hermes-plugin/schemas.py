@@ -29,7 +29,10 @@ TOOL_SCHEMAS: dict[str, dict] = {
                             "model": {"type": "string"},
                             "reasoningEffort": {"type": "string"},
                             "executionPrompt": {"type": "string"},
-                            "toolPolicy": {"type": "string"},
+                            "toolPolicy": {
+                                "type": "string",
+                                "description": "Optional tool policy id. Built-ins: 'readonly' (blocks write_file/patch/edit/delete/skill_manage; auto-applied to reviewer/architect/auditor roles), 'strict-readonly' (also blocks terminal/execute_code), 'coding', 'full'. Custom policies can be declared in ~/.hermes/agent-teams.yaml.",
+                            },
                         },
                         "required": ["name"],
                     },

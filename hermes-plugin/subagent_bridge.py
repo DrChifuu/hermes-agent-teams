@@ -172,6 +172,21 @@ class SubagentBridge:
 
         threading.Thread(target=_send, name="hat-activity", daemon=True).start()
 
+    @staticmethod
+    def _extract_effective_tool_names(tool_name: str, args: Any) -> list[str]:
+        """Return `[tool_name]` plus any inner tool names when invoked via Hermes's `tool_call` bridge."""
+        names = [tool_name]
+        if tool_name == "tool_call" and isinstance(args, dict):
+            inner = args.get("name")
+            if isinstance(inner, str) and inner.strip():
+                names.append(inner.strip())
+            calls = args.get("calls")
+            if isinstance(calls, list):
+                for entry in calls:
+                    if isinstance(entry, dict) and isinstance(entry.get("name"), str) and entry["name"].strip():
+                        names.append(entry["name"].strip())
+        return names
+
     def handle_pre_tool_call(
         self,
         *,
@@ -186,25 +201,28 @@ class SubagentBridge:
         team_id, member_name, workspace, subagent_id, tool_filter = info
         arg_preview = _summarize_tool_args(tool_name, args)
 
-        # Enforce owner-declared tool policy (e.g. readonly reviewer/architect cannot write_file/patch).
+        # Enforce owner-declared tool policy (e.g. readonly reviewer/architect cannot write_file/patch),
+        # checking both direct tool calls and inner tools routed through Hermes's `tool_call` bridge.
         if isinstance(tool_filter, dict):
-            deny = tool_filter.get("deny") or []
+            deny = set(tool_filter.get("deny") or [])
             allow = tool_filter.get("allow")
-            blocked = tool_name in deny or (isinstance(allow, list) and allow and tool_name not in allow)
-            if blocked:
-                msg = f"Tool '{tool_name}' bloqueada por política de solo lectura del rol '{member_name}'."
-                self.emit_activity_async(
-                    team_id=team_id,
-                    member=member_name,
-                    workspace=workspace,
-                    subagent_id=subagent_id,
-                    kind="blocked",
-                    tool=tool_name,
-                    summary=msg,
-                    detail=arg_preview or None,
-                    status="blocked",
-                )
-                return {"action": "block", "message": msg}
+            allow_set = set(allow) if isinstance(allow, list) and allow else None
+            effective_names = self._extract_effective_tool_names(tool_name, args)
+            for candidate in effective_names:
+                if candidate in deny or (allow_set is not None and candidate != "tool_call" and candidate not in allow_set):
+                    msg = f"Tool '{candidate}' bloqueada por política de solo lectura del rol '{member_name}'."
+                    self.emit_activity_async(
+                        team_id=team_id,
+                        member=member_name,
+                        workspace=workspace,
+                        subagent_id=subagent_id,
+                        kind="blocked",
+                        tool=candidate,
+                        summary=msg,
+                        detail=arg_preview or None,
+                        status="blocked",
+                    )
+                    return {"action": "block", "message": msg}
 
         self.emit_activity_async(
             team_id=team_id,

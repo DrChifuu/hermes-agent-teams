@@ -45,7 +45,32 @@ async fn main() {
                 std::process::exit(1);
             }
         },
-        _ => TeamsConfig::default(),
+        _ => {
+            let default_cfg_path = env::var("HERMES_HOME")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .map(PathBuf::from)
+                .or_else(|| {
+                    env::var("HOME")
+                        .ok()
+                        .filter(|s| !s.trim().is_empty())
+                        .map(|h| PathBuf::from(h).join(".hermes"))
+                })
+                .map(|h| h.join("agent-teams.yaml"));
+            match default_cfg_path {
+                Some(ref p) if p.is_file() => match TeamsConfig::load_yaml(p) {
+                    Ok(cfg) => {
+                        info!(path = %p.display(), "loaded owner agent-teams.yaml");
+                        cfg
+                    }
+                    Err(err) => {
+                        eprintln!("Failed to load {} ({err})", p.display());
+                        std::process::exit(1);
+                    }
+                },
+                _ => TeamsConfig::default(),
+            }
+        }
     };
 
     let auth_mode = AuthMode::from_env();

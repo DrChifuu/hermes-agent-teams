@@ -23,6 +23,7 @@ use tokio_stream::StreamExt;
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health_handler))
+        .route("/api/v1/policies", get(policies_handler))
         .route("/api/v1/state", get(state_handler))
         .route("/api/v1/events", get(events_sse_handler))
         .route("/api/v1/inbox", get(inbox_handler))
@@ -49,7 +50,19 @@ async fn health_handler(State(state): State<AppState>) -> Json<Value> {
         "version": env!("CARGO_PKG_VERSION"),
         "uptimeSecs": state.uptime_secs(),
         "authMode": format!("{:?}", state.auth_mode()),
+        "policies": state.available_policy_ids(),
     }))
+}
+
+async fn policies_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    verify_request_auth(state.auth_mode(), &headers)?;
+    Ok(Json(json!({
+        "ok": true,
+        "policies": state.policies_summary(),
+    })))
 }
 
 #[derive(Debug, Deserialize)]

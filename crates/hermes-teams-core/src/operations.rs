@@ -1520,7 +1520,14 @@ impl TeamEngine {
                 let filter = self.config.resolve_policy_id(pid)?;
                 (Some(pid.to_string()), Some(filter))
             }
-            _ => (None, None),
+            _ => {
+                if crate::policies::is_readonly_role(input.role.as_deref()) {
+                    let filter = self.config.resolve_policy_id("readonly")?;
+                    (Some("readonly".to_string()), Some(filter))
+                } else {
+                    (None, None)
+                }
+            }
         };
 
         Ok(TeamMember {

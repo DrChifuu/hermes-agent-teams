@@ -203,6 +203,14 @@ impl AppState {
         self.0.auth_mode
     }
 
+    pub fn available_policy_ids(&self) -> Vec<String> {
+        self.0.config.available_policy_ids()
+    }
+
+    pub fn policies_summary(&self) -> serde_json::Value {
+        serde_json::to_value(&self.0.config.tool_policies).unwrap_or_else(|_| serde_json::json!({}))
+    }
+
     pub fn resolve_workspace(&self, raw: Option<&str>) -> PathBuf {
         let path = raw
             .map(str::trim)

@@ -116,6 +116,69 @@ const fn default_max_members() -> usize {
     8
 }
 
+/// Built-in default tool policies available out of the box (overridable via owner config YAML).
+pub fn builtin_tool_policies() -> BTreeMap<String, RawToolPolicy> {
+    let readonly = RawToolPolicy {
+        allow: None,
+        deny: Some(vec![
+            "write_file".to_string(),
+            "patch".to_string(),
+            "edit_file".to_string(),
+            "delete_file".to_string(),
+            "apply_patch".to_string(),
+            "skill_manage".to_string(),
+        ]),
+    };
+    let strict_readonly = RawToolPolicy {
+        allow: None,
+        deny: Some(vec![
+            "write_file".to_string(),
+            "patch".to_string(),
+            "edit_file".to_string(),
+            "delete_file".to_string(),
+            "apply_patch".to_string(),
+            "skill_manage".to_string(),
+            "terminal".to_string(),
+            "process_manage".to_string(),
+            "execute_code".to_string(),
+        ]),
+    };
+    let coding = RawToolPolicy {
+        allow: None,
+        deny: Some(vec!["cronjob_manage".to_string()]),
+    };
+
+    let mut map = BTreeMap::new();
+    map.insert("readonly".to_string(), readonly.clone());
+    map.insert("read-only".to_string(), readonly.clone());
+    map.insert("read_only".to_string(), readonly.clone());
+    map.insert("review-readonly".to_string(), readonly.clone());
+    map.insert("reviewer-readonly".to_string(), readonly);
+    map.insert("strict-readonly".to_string(), strict_readonly);
+    map.insert("coding".to_string(), coding.clone());
+    map.insert("full".to_string(), coding);
+    map
+}
+
+/// Returns true if the given member role should default to `readonly` when `toolPolicy` is omitted.
+pub fn is_readonly_role(role: Option<&str>) -> bool {
+    let Some(raw) = role else {
+        return false;
+    };
+    let lower = raw.trim().to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "reviewer"
+            | "revisor"
+            | "architect"
+            | "arquitecto"
+            | "arquitecto-revisor"
+            | "auditor"
+            | "explorer"
+            | "inspector"
+    )
+}
+
 impl Default for TeamsConfig {
     fn default() -> Self {
         Self {
@@ -126,7 +189,7 @@ impl Default for TeamsConfig {
             member_llm_provider: None,
             execution_prompt: None,
             fallback: None,
-            tool_policies: BTreeMap::new(),
+            tool_policies: builtin_tool_policies(),
             profiles: BTreeMap::new(),
         }
     }
@@ -135,9 +198,19 @@ impl Default for TeamsConfig {
 impl TeamsConfig {
     pub fn load_yaml(path: impl AsRef<Path>) -> Result<Self> {
         let raw = std::fs::read_to_string(path)?;
-        let cfg: Self = serde_yaml::from_str(&raw)?;
+        let mut cfg: Self = serde_yaml::from_str(&raw)?;
+        // Merge built-in policies under owner-declared policies so defaults always exist
+        // while owner overrides win.
+        for (id, policy) in builtin_tool_policies() {
+            cfg.tool_policies.entry(id).or_insert(policy);
+        }
         cfg.validate()?;
         Ok(cfg)
+    }
+
+    /// Return all available tool policy IDs in deterministic order.
+    pub fn available_policy_ids(&self) -> Vec<String> {
+        self.tool_policies.keys().cloned().collect()
     }
 
     /// Validate all declared tool policies fail-closed at load time.
@@ -148,11 +221,14 @@ impl TeamsConfig {
         Ok(())
     }
 
-    /// Look up and resolve an owner-declared tool policy id.
+    /// Look up and resolve an owner-declared or built-in tool policy id.
     pub fn resolve_policy_id(&self, id: &str) -> Result<MemberToolFilter> {
         let trimmed = id.trim();
         let raw = self.tool_policies.get(trimmed).ok_or_else(|| {
-            TeamsError::ToolPolicyViolation(format!("unknown tool policy id '{trimmed}'"))
+            let available = self.available_policy_ids().join(", ");
+            TeamsError::ToolPolicyViolation(format!(
+                "unknown tool policy id '{trimmed}' (available: {available})"
+            ))
         })?;
         resolve_tool_policy(trimmed, raw)
     }
@@ -229,4 +305,38 @@ pub fn resolve_tool_policy(id: &str, raw: &RawToolPolicy) -> Result<MemberToolFi
         allow,
         deny: deny.into_iter().collect(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_readonly_and_strict_policies_work_out_of_the_box() {
+        let cfg = TeamsConfig::default();
+        let ro = cfg.resolve_policy_id("readonly").expect("readonly builtin");
+        assert!(ro.deny.iter().any(|t| t == "write_file"));
+        assert!(ro.deny.iter().any(|t| t == "patch"));
+        assert!(!ro.deny.iter().any(|t| t == "terminal"));
+        assert!(!ro.deny.iter().any(|t| t == "agent_teams_update_task"));
+
+        let sro = cfg
+            .resolve_policy_id("strict-readonly")
+            .expect("strict-readonly builtin");
+        assert!(sro.deny.iter().any(|t| t == "terminal"));
+        assert!(sro.deny.iter().any(|t| t == "write_file"));
+
+        assert!(is_readonly_role(Some("reviewer")));
+        assert!(is_readonly_role(Some("arquitecto-revisor")));
+        assert!(!is_readonly_role(Some("engineer")));
+
+        let err = cfg
+            .resolve_policy_id("nonexistent-policy")
+            .expect_err("unknown must fail closed");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("readonly"),
+            "error should list available policies: {msg}"
+        );
+    }
 }

@@ -17,16 +17,19 @@ Use them whenever the user runs `/agent-teams <goal>` or asks to collaborate wit
    - If the user discards a staged plan, do NOT automatically recreate it unless asked again.
 3. **Model inheritance:** By default omit `provider` and `model` on members so they snapshot your current Hermes model, provider, and reasoning effort automatically. Only specify `provider`/`model` when the user asks for specific models per role.
 4. **Execution & coordination:** Once approved, the Rust scheduler automatically assigns ready tasks to idle members with unique `attemptId` tokens. Members communicate directly via `agent_teams_send_message` and report completion with `agent_teams_update_task`.
-5. **Quality gates (opt-in):** For structured engineering flows, use `kind` (`requirements`, `implementation`, `verification`, `review`, `repair`, `integration`) with `objective`, `acceptance`, `inScope`, and `verify`. Failed `review` tasks with `verdict: "needs_revision"` automatically spawn `repair` + next-round `review` tasks.
+5. **Tool policies & Quality gates:** Built-in `toolPolicy` IDs are `readonly` (blocks `write_file`/`patch`/edits; automatically applied by default to `reviewer`/`architect`/`auditor`/`explorer` roles), `strict-readonly` (also blocks `terminal`/`execute_code`), `coding`, and `full` (custom policies can be added in `~/.hermes/agent-teams.yaml`). For structured engineering flows, use `kind` (`requirements`, `implementation`, `verification`, `review`, `repair`, `integration`) with `objective`, `acceptance`, `inScope`, and `verify`. Failed `review` tasks with `verdict: "needs_revision"` automatically spawn `repair` + next-round `review` tasks.
 6. **Delivery & archive:** When all tasks finish, inspect `agent_teams_status`, present one consolidated report, and call `agent_teams_delete` to archive the complete history (members, DAG, outputs, mailboxes).
 """
 
 MEMBER_INSTRUCTIONS = (
     "You are a durable teammate in Hermes Agent Teams. "
-    "Use `agent_teams_claim_task`, `agent_teams_update_task` (always passing your current `attempt_id`), "
+    "Your coordination tools are `agent_teams_claim_task`, `agent_teams_update_task` (always passing your current `attemptId`), "
     "`agent_teams_send_message`, and `agent_teams_status`. "
-    "Do not call captain-only tools. When your task finishes, record the result with `agent_teams_update_task` "
-    "and notify `captain` or downstream teammates via `agent_teams_send_message`."
+    "NOTE: If Hermes Progressive Tool Disclosure (`tool_search` / `tool_call`) is active in your session, "
+    "invoke these tools via `tool_call` (e.g. `tool_call(name='agent_teams_update_task', arguments={...})`) after checking `tool_search` if needed. "
+    "If any required `agent_teams_*` tool is genuinely unavailable, stop immediately and report the exact error instead of burning turns. "
+    "Do not call captain-only tools, and strictly obey your tool policy (e.g. readonly reviewers must never write or patch files). "
+    "When your task finishes, record the result with `agent_teams_update_task` and notify `captain` or downstream teammates via `agent_teams_send_message`."
 )
 
 
