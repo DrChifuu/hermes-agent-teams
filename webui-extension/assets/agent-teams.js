@@ -56,6 +56,8 @@
       chatReviewApprove: 'Revisar y aprobar',
       chatOpenTeam: 'Abrir panel',
       chatTeamRunning: 'Equipo activo en esta sesión',
+      chatTeamDone: 'Equipo finalizado — listo para informe final',
+      chatAskReport: 'Pedir informe al Capitán',
       stagedBannerTitle: 'Plan en borrador — revisa antes de ejecutar',
       stagedBannerDesc: 'Ajusta roles, modelos de Hermes o dependencias y pulsa Aprobar y ejecutar.',
       awaitingFeedbackHint: 'Esperando tus cambios en el chat. El Capitán actualizará este mismo borrador.',
@@ -131,6 +133,8 @@
       chatReviewApprove: 'Review & Approve',
       chatOpenTeam: 'Open panel',
       chatTeamRunning: 'Active team in this session',
+      chatTeamDone: 'Team finished — ready for final report',
+      chatAskReport: 'Ask Captain for report',
       stagedBannerTitle: 'Staged Plan — Review before running',
       stagedBannerDesc: 'Adjust roles, Hermes models, or dependencies and click Approve & Run.',
       awaitingFeedbackHint: 'Waiting for your feedback in chat. Captain will revise this same draft.',
@@ -541,6 +545,41 @@
     return false;
   }
 
+  function isTeamFinished(team) {
+    if (!team || team.phase === 'staged' || team.halted) return false;
+    const st = team.stats || {};
+    if (!st.total || st.total <= 0) return false;
+    const anyWorking = (team.members || []).some((m) => m.activity === 'working');
+    return (
+      !anyWorking &&
+      (st.inProgress || 0) === 0 &&
+      (st.waitingDeps || 0) === 0 &&
+      (st.pendingReady || 0) === 0
+    );
+  }
+
+  function triggerCaptainReport(team) {
+    if (!team) return;
+    const prompt =
+      getLang() === 'es'
+        ? `El equipo ${team.name} terminó todas sus tareas. Revisa agent_teams_status y entrégame el informe final consolidado (sin archivar hasta que te confirme).`
+        : `Team ${team.name} has finished all tasks. Inspect agent_teams_status and deliver the consolidated final report.`;
+    const input =
+      document.getElementById('msgInput') ||
+      document.querySelector('#composerWrap textarea, textarea[data-testid="chat-input"], textarea');
+    const sendBtn =
+      document.getElementById('btnSend') ||
+      document.querySelector('#composerWrap button[type="submit"], button.send-btn');
+    if (input) {
+      input.value = prompt;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.focus();
+      if (sendBtn && !sendBtn.disabled) {
+        sendBtn.click();
+      }
+    }
+  }
+
   function renderChatBanner() {
     if (!mountChatBanner()) {
       chatBanner.hidden = true;
@@ -552,8 +591,9 @@
       ? activeTeams.filter((t) => !t.archived && String(t.captainSessionId || '').trim() === sid)
       : [];
     const stagedTeam = sessionTeams.find((t) => t.phase === 'staged');
-    const runningTeam = sessionTeams.find((t) => !t.halted && t.phase !== 'staged');
-    const target = stagedTeam || (!uiState.open ? runningTeam : null);
+    const doneTeam = sessionTeams.find((t) => isTeamFinished(t));
+    const runningTeam = sessionTeams.find((t) => !t.halted && t.phase !== 'staged' && !isTeamFinished(t));
+    const target = stagedTeam || doneTeam || (!uiState.open ? runningTeam : null);
     if (!target) {
       chatBanner.hidden = true;
       return;
@@ -561,6 +601,7 @@
 
     const art = window.HermesTeamsArtwork;
     const isStaged = target.phase === 'staged';
+    const isDone = isTeamFinished(target);
     const meta = statusMeta(target);
     const stats = target.stats || {};
     const captainRoute = resolveCaptainRoute(target);
@@ -574,23 +615,31 @@
       }),
     ].join('');
 
+    const titleText = isStaged
+      ? tr('chatPlanReady')
+      : isDone
+        ? tr('chatTeamDone')
+        : tr('chatTeamRunning');
+
     chatBanner.hidden = false;
-    chatBanner.className = `hat-chat-banner${isStaged ? ' is-staged' : ' is-running'}`;
+    chatBanner.className = `hat-chat-banner${isStaged ? ' is-staged' : isDone ? ' is-done' : ' is-running'}`;
     chatBanner.innerHTML = `
       <div class="hat-chat-banner-main" role="button" tabindex="0" data-action="open-chat-team">
         <img class="hat-chat-banner-img" src="${esc(art.LEAD_ART)}" alt="Captain Ferris" />
         <div class="hat-chat-banner-body">
           <div class="hat-chat-banner-top">
-            <span class="hat-chat-banner-title">${esc(isStaged ? tr('chatPlanReady') : tr('chatTeamRunning'))}</span>
+            <span class="hat-chat-banner-title">${esc(titleText)}</span>
             <span class="hat-chat-banner-name">${esc(target.name)}</span>
             <span class="hat-status-pill ${meta.cls}">${esc(meta.label)}</span>
             <span class="hat-chat-banner-tasks">${stats.completed || 0}/${stats.total || (target.tasks || []).length} ${esc(tr('tasks'))}</span>
           </div>
           <div class="hat-chat-banner-models">${modelChips}</div>
         </div>
-        <button type="button" class="${isStaged ? 'hat-btn-primary' : 'hat-btn-secondary'} hat-chat-banner-cta" data-action="open-chat-team">
-          ${esc(isStaged ? tr('chatReviewApprove') : tr('chatOpenTeam'))} 🦀
-        </button>
+        ${
+          isDone
+            ? `<button type="button" class="hat-btn-primary hat-chat-banner-cta" data-action="ask-captain-report">${esc(tr('chatAskReport'))} 🦀</button>`
+            : `<button type="button" class="${isStaged ? 'hat-btn-primary' : 'hat-btn-secondary'} hat-chat-banner-cta" data-action="open-chat-team">${esc(isStaged ? tr('chatReviewApprove') : tr('chatOpenTeam'))} 🦀</button>`
+        }
       </div>`;
 
     const openTarget = () => {
@@ -603,6 +652,13 @@
       render();
       void refreshState(true);
     };
+    const reportBtn = chatBanner.querySelector('[data-action="ask-captain-report"]');
+    if (reportBtn) {
+      reportBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        triggerCaptainReport(target);
+      });
+    }
     chatBanner.querySelectorAll('[data-action="open-chat-team"]').forEach((el) => {
       el.addEventListener('click', (ev) => {
         ev.stopPropagation();
@@ -673,8 +729,7 @@
     if (team.archived) return { cls: 'is-done', label: tr('statusArchived') };
     if (team.phase === 'staged') return { cls: 'is-staged', label: tr('statusStaged') };
     if (team.halted) return { cls: 'is-halted', label: tr('statusHalted') };
-    const st = team.stats || {};
-    if (st.total > 0 && st.completed === st.total) return { cls: 'is-done', label: tr('statusDone') };
+    if (isTeamFinished(team)) return { cls: 'is-done', label: tr('statusDone') };
     return { cls: 'is-running', label: tr('statusRunning') };
   }
 
@@ -712,7 +767,7 @@
       messageCount: 0,
     };
 
-    const showStop = team && !team.archived && !team.halted && team.phase !== 'staged';
+    const showStop = team && !team.archived && !team.halted && team.phase !== 'staged' && !isTeamFinished(team);
     const switcherList =
       uiState.tab === 'archive'
         ? archivedTeams
@@ -862,7 +917,7 @@
     const stats = team.stats || {};
     const tasks = team.tasks || [];
     const members = team.members || [];
-    const allDone = stats.total > 0 && stats.completed === stats.total;
+    const allDone = isTeamFinished(team);
     const captainRoute = resolveCaptainRoute(team);
 
     const segments = tasks
@@ -1363,7 +1418,7 @@
   function scheduleNextPoll() {
     if (uiState.pollTimer) window.clearTimeout(uiState.pollTimer);
     const hasRunning = (uiState.payload.teams || []).some(
-      (t) => !t.halted && t.phase !== 'staged' && (t.stats && t.stats.completed < t.stats.total)
+      (t) => !t.halted && t.phase !== 'staged' && !isTeamFinished(t)
     );
     const fast = hasRunning || (uiState.open && uiState.tab === 'live');
     const delay = document.hidden ? 10000 : fast ? 1500 : uiState.open ? 4000 : 3000;
