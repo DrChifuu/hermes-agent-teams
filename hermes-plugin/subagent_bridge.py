@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
+import os
 import queue
 import threading
 import time
+import urllib.request
 from typing import Any
 
 from .client import TeamsDaemonClient
@@ -496,7 +499,7 @@ class SubagentBridge:
                 elif kind == "cancel_member":
                     self._handle_cancel_member(directive, workspace=workspace)
                 elif kind == "wake_captain":
-                    self._handle_wake_captain(directive)
+                    self._handle_wake_captain(directive, workspace=workspace)
             except Exception as exc:  # noqa: BLE001
                 _log.warning("Failed executing directive %s: %s", kind, exc)
 
@@ -704,19 +707,61 @@ class SubagentBridge:
         except Exception as exc:  # noqa: BLE001
             _log.debug("Cancel fallback for %s: %s", subagent_id, exc)
 
-    def _handle_wake_captain(self, d: dict[str, Any]) -> None:
+    @staticmethod
+    def _should_auto_wake_webui(message: str) -> bool:
+        """Only auto-start a WebUI Captain turn for terminal/milestone events (avoid intermediate mail spam)."""
+        low = message.lower()
+        return (
+            "have finished" in low
+            or "revise staged team plan" in low
+            or "escalat" in low
+        )
+
+    def _wake_captain_via_webui(self, captain_sid: str, message: str, workspace: str = "") -> bool:
+        """Trigger a real Captain turn in Hermes WebUI when no gateway runner is active."""
+        base = (os.environ.get("HERMES_WEBUI_URL") or "http://127.0.0.1:8787").rstrip("/")
+        payload: dict[str, Any] = {
+            "session_id": captain_sid,
+            "message": message,
+            "goal_continuation_id": "",
+        }
+        if workspace:
+            payload["workspace"] = workspace
+        req = urllib.request.Request(
+            f"{base}/api/chat/start",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Origin": base,
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if 200 <= resp.status < 300:
+                    _log.info("Auto-woke Captain session %s via WebUI /api/chat/start", captain_sid)
+                    return True
+        except Exception as exc:  # noqa: BLE001
+            _log.debug("WebUI Captain auto-wake failed for %s: %s", captain_sid, exc)
+        return False
+
+    def _handle_wake_captain(self, d: dict[str, Any], *, workspace: str = "") -> None:
         message = str(d.get("message") or "").strip()
         if not message:
             return
         captain_sid = str(d.get("captain_session_id") or d.get("captainSessionId") or "").strip()
+        delivered = False
         try:
             inject = getattr(self.ctx, "inject_message", None)
             if callable(inject):
-                if captain_sid:
-                    inject(message, session_key=captain_sid)
-                else:
-                    inject(message)
+                delivered = bool(
+                    inject(message, session_key=captain_sid) if captain_sid else inject(message)
+                )
             elif callable(getattr(self.ctx, "post_message", None)):
                 self.ctx.post_message(message)
+                delivered = True
         except Exception as exc:  # noqa: BLE001
             _log.debug("Captain wake notification deferred: %s", exc)
+
+        if not delivered and captain_sid and self._should_auto_wake_webui(message):
+            self._wake_captain_via_webui(captain_sid, message, workspace=workspace)
