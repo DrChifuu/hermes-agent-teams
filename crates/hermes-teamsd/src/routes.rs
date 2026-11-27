@@ -453,7 +453,8 @@ async fn dispatch_tool_handler(
     match tool_name.as_str() {
         "agent_teams_create" => {
             let mut input: CreateTeamInput = serde_json::from_value(env.args)?;
-            if state.is_full_access() {
+            let full_access = state.is_full_access();
+            if full_access {
                 input.approval = Some("automatic".to_string());
                 for m in &mut input.members {
                     if m.tool_policy.is_none() {
@@ -461,30 +462,35 @@ async fn dispatch_tool_handler(
                     }
                 }
             }
-            let out = state.with_engine(&ws, |engine| engine.create_team(input))?;
+            let mut out = state.with_engine(&ws, |engine| engine.create_team(input))?;
+            if full_access {
+                out.summary.push_str(
+                    " [Full Access mode is ON (authorized by user): team was auto-approved and started intentionally; do NOT delete or halt it for skipping manual review.]",
+                );
+            }
             state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "team_created");
-            Ok(Json(compact_tool_output(&out)))
+            Ok(Json(compact_tool_output(&out, full_access)))
         }
         "agent_teams_approve" => {
             let team_id = extract_str(&env.args, "teamId", "team_id")?;
             let out = state.with_engine(&ws, |engine| engine.approve_team(&team_id))?;
             state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "team_approved");
-            Ok(Json(compact_tool_output(&out)))
+            Ok(Json(compact_tool_output(&out, state.is_full_access())))
         }
         "agent_teams_edit_plan" => {
             let input: EditPlanInput = serde_json::from_value(env.args)?;
             let out = state.with_engine(&ws, |engine| engine.edit_plan(input))?;
             state.publish_event(&ws, Some(out.team.id.clone()), "plan_edited");
-            Ok(Json(compact_tool_output(&out)))
+            Ok(Json(compact_tool_output(&out, state.is_full_access())))
         }
         "agent_teams_add_member" => {
             let input: AddMemberInput = serde_json::from_value(env.args)?;
             let out = state.with_engine(&ws, |engine| engine.add_member(input))?;
             state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "member_added");
-            Ok(Json(compact_tool_output(&out)))
+            Ok(Json(compact_tool_output(&out, state.is_full_access())))
         }
         "agent_teams_remove_member" => {
             let team_id = extract_str(&env.args, "teamId", "team_id")?;
@@ -492,21 +498,21 @@ async fn dispatch_tool_handler(
             let out = state.with_engine(&ws, |engine| engine.remove_member(&team_id, &member))?;
             state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "member_removed");
-            Ok(Json(compact_tool_output(&out)))
+            Ok(Json(compact_tool_output(&out, state.is_full_access())))
         }
         "agent_teams_create_task" => {
             let input: CreateTaskInput = serde_json::from_value(env.args)?;
             let out = state.with_engine(&ws, |engine| engine.create_task(input))?;
             state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "task_created");
-            Ok(Json(compact_tool_output(&out)))
+            Ok(Json(compact_tool_output(&out, state.is_full_access())))
         }
         "agent_teams_reassign_task" => {
             let input: ReassignTaskInput = serde_json::from_value(env.args)?;
             let out = state.with_engine(&ws, |engine| engine.reassign_task(&input))?;
             state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "task_reassigned");
-            Ok(Json(compact_tool_output(&out)))
+            Ok(Json(compact_tool_output(&out, state.is_full_access())))
         }
         "agent_teams_claim_task" => {
             let team_id = extract_str(&env.args, "teamId", "team_id")?;
@@ -521,7 +527,7 @@ async fn dispatch_tool_handler(
             })?;
             state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "task_claimed");
-            Ok(Json(compact_tool_output(&out)))
+            Ok(Json(compact_tool_output(&out, state.is_full_access())))
         }
         "agent_teams_update_task" => {
             let mut val = env.args;
@@ -549,13 +555,13 @@ async fn dispatch_tool_handler(
             );
             state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "task_updated");
-            Ok(Json(compact_tool_output(&out)))
+            Ok(Json(compact_tool_output(&out, state.is_full_access())))
         }
         "agent_teams_amend_task" => {
             let input: AmendTaskInput = serde_json::from_value(env.args)?;
             let out = state.with_engine(&ws, |engine| engine.amend_task(input))?;
             state.publish_event(&ws, Some(out.team.id.clone()), "task_amended");
-            Ok(Json(compact_tool_output(&out)))
+            Ok(Json(compact_tool_output(&out, state.is_full_access())))
         }
         "agent_teams_send_message" => {
             let mut val = env.args;
@@ -585,7 +591,7 @@ async fn dispatch_tool_handler(
             let out = state.with_engine(&ws, |engine| engine.resume_team(&team_id, &reason))?;
             state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "team_resumed");
-            Ok(Json(serde_json::to_value(out)?))
+            Ok(Json(compact_tool_output(&out, state.is_full_access())))
         }
         "agent_teams_delete" => {
             let team_id = extract_str(&env.args, "teamId", "team_id")?;
@@ -599,7 +605,7 @@ async fn dispatch_tool_handler(
             })?;
             state.enqueue_directives(&ws, out.directives.clone());
             state.publish_event(&ws, Some(out.team.id.clone()), "team_archived");
-            Ok(Json(serde_json::to_value(out)?))
+            Ok(Json(compact_tool_output(&out, state.is_full_access())))
         }
         other => Err(ApiError::bad_request(format!(
             "unknown agent_teams tool '{other}'"
@@ -737,7 +743,10 @@ async fn team_delete_handler(
 }
 
 /// Compact tool response for LLM tool calls (avoids bloating Captain context with 50KB of historical outputs).
-fn compact_tool_output(out: &hermes_teams_core::operations::OperationOutput) -> Value {
+fn compact_tool_output(
+    out: &hermes_teams_core::operations::OperationOutput,
+    full_access: bool,
+) -> Value {
     let members: Vec<Value> = out
         .team
         .members
@@ -775,6 +784,7 @@ fn compact_tool_output(out: &hermes_teams_core::operations::OperationOutput) -> 
         "summary": out.summary,
         "teamId": out.team.id,
         "phase": out.team.effective_phase(),
+        "fullAccess": full_access,
         "halted": out.team.is_halted(),
         "escalated": out.team.escalated.unwrap_or(false),
         "members": members,

@@ -1,6 +1,6 @@
 """Fixed system prompt sections for Captain & Member Agent Teams protocol."""
 
-MAX_PROMPT_CHARS = 3200
+MAX_PROMPT_CHARS = 3600
 
 CAPTAIN_PROTOCOL_SECTION = """## Agent Teams Protocol (Hermes Agent Teams)
 
@@ -11,6 +11,7 @@ Use them whenever the user runs `/agent-teams <goal>` or asks to collaborate wit
 1. **Check existing team first:** If a team already exists in this session, continue it and check `agent_teams_status`.
 2. **Stage a plan before spawning (default):** Call `agent_teams_create` with `approval: "manual"` (default), declaring `members` (roles, optional model/provider overrides only if the user asks for heterogeneous models) and a dependency-aware `tasks` DAG.
    - Only pass `approval: "automatic"` if the user explicitly asks to skip plan review.
+   - **Full Access mode:** If `fullAccess: true` is returned, the user enabled Full Access in the panel so `hermes-teamsd` intentionally auto-approved and started the team in `running` phase — let it run and NEVER delete or halt it for skipping manual review.
    - While staged, no subagents are spawned and no tasks are claimed.
    - Wait for the user to click **Approve & Run** in the Agent Teams panel (or explicitly approve in chat).
    - If the user returns to chat to revise, ask concisely what to change and update the **same** draft atomically with `agent_teams_edit_plan` (never create a second team).
