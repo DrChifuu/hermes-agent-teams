@@ -472,7 +472,7 @@
       }
 
       let actChanged = false;
-      if (uiState.open && (uiState.tab === 'live' || (activeTeam && activeTeam.phase === 'running'))) {
+      if (uiState.open && uiState.tab === 'live') {
         actChanged = await refreshActivity(activeTeam, true);
       }
 
@@ -932,6 +932,35 @@
 
     const team = currentTeam();
     if (team) void ensureCaptainRoute(team);
+
+    // Preserve scroll positions across polling re-renders on the same tab & team
+    const viewKey = `${uiState.tab}:${team ? team.id : ''}`;
+    const sameView = uiState._lastRenderViewKey === viewKey;
+    const savedScroll = sameView
+      ? {
+          bodyTop: (panel.querySelector('#hat-body') || {}).scrollTop || 0,
+          dagTop: (panel.querySelector('.hat-dag-scroll') || {}).scrollTop || 0,
+          dagLeft: (panel.querySelector('.hat-dag-scroll') || {}).scrollLeft || 0,
+          liveTop: (panel.querySelector('.hat-live-feed') || {}).scrollTop || 0,
+          detailTop: (panel.querySelector('.hat-detail-output') || {}).scrollTop || 0,
+        }
+      : null;
+    uiState._lastRenderViewKey = viewKey;
+
+    const restoreScroll = () => {
+      if (!savedScroll) return;
+      const b = panel.querySelector('#hat-body');
+      if (b && savedScroll.bodyTop) b.scrollTop = savedScroll.bodyTop;
+      const d = panel.querySelector('.hat-dag-scroll');
+      if (d) {
+        if (savedScroll.dagTop) d.scrollTop = savedScroll.dagTop;
+        if (savedScroll.dagLeft) d.scrollLeft = savedScroll.dagLeft;
+      }
+      const l = panel.querySelector('.hat-live-feed');
+      if (l && savedScroll.liveTop) l.scrollTop = savedScroll.liveTop;
+      const o = panel.querySelector('.hat-detail-output');
+      if (o && savedScroll.detailTop) o.scrollTop = savedScroll.detailTop;
+    };
     const meta = team ? statusMeta(team) : null;
     const stats = (team && team.stats) || {
       total: 0,
@@ -1034,6 +1063,7 @@
 
     if (uiState.tab === 'live') {
       renderLiveWorkspace(body, team);
+      restoreScroll();
       return;
     }
 
@@ -1096,6 +1126,7 @@
     }
 
     renderActiveWorkspace(body, team);
+    restoreScroll();
   }
 
   function renderActiveWorkspace(body, team) {
