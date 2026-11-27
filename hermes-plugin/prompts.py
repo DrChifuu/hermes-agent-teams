@@ -16,9 +16,10 @@ Use them whenever the user runs `/agent-teams <goal>` or asks to collaborate wit
    - If the user returns to chat to revise, ask concisely what to change and update the **same** draft atomically with `agent_teams_edit_plan` (never create a second team).
    - If the user discards a staged plan, do NOT automatically recreate it unless asked again.
 3. **Model inheritance:** By default omit `provider` and `model` on members so they snapshot your current Hermes model, provider, and reasoning effort automatically. Only specify `provider`/`model` when the user asks for specific models per role.
-4. **Execution & coordination:** Once approved, the Rust scheduler automatically assigns ready tasks to idle members with unique `attemptId` tokens. Members communicate directly via `agent_teams_send_message` and report completion with `agent_teams_update_task`.
-5. **Tool policies & Quality gates:** Built-in `toolPolicy` IDs are `readonly` (blocks `write_file`/`patch`/edits; automatically applied by default to `reviewer`/`architect`/`auditor`/`explorer` roles), `strict-readonly` (also blocks `terminal`/`execute_code`), `coding`, and `full` (custom policies can be added in `~/.hermes/agent-teams.yaml`). For structured engineering flows, use `kind` (`requirements`, `implementation`, `verification`, `review`, `repair`, `integration`) with `objective`, `acceptance`, `inScope`, and `verify`. Failed `review` tasks with `verdict: "needs_revision"` automatically spawn `repair` + next-round `review` tasks.
-6. **Delivery & archive:** When all tasks finish, inspect `agent_teams_status`, present one consolidated report, and call `agent_teams_delete` to archive the complete history (members, DAG, outputs, mailboxes).
+4. **Parallelism by default (fan-out / fan-in DAG):** The Rust scheduler dispatches ALL ready tasks to ALL idle members simultaneously (up to 4 concurrent subagents). Whenever a goal splits into independent modules, files, or layers (e.g., frontend vs backend, component A vs component B, implementation vs test harness/docs), create 2–3 specialized workers (`ejecutor-1`/`ejecutor-2` or role-named) and put independent tasks in parallel with **disjoint `inScope` file paths** so writers never collide, converging into a final verification/review/integration task. Only serialize tasks that genuinely depend on each other or edit the same file.
+5. **Execution & coordination:** Once approved, the Rust scheduler automatically assigns ready tasks to idle members with unique `attemptId` tokens. Members communicate directly via `agent_teams_send_message` and report completion with `agent_teams_update_task`.
+6. **Tool policies & Quality gates:** Built-in `toolPolicy` IDs are `readonly` (blocks `write_file`/`patch`/edits; automatically applied by default to `reviewer`/`architect`/`auditor`/`explorer` roles), `strict-readonly` (also blocks `terminal`/`execute_code`), `coding`, and `full` (custom policies can be added in `~/.hermes/agent-teams.yaml`). For structured engineering flows, use `kind` (`requirements`, `implementation`, `verification`, `review`, `repair`, `integration`) with `objective`, `acceptance`, `inScope`, and `verify`. Failed `review` tasks with `verdict: "needs_revision"` automatically spawn `repair` + next-round `review` tasks.
+7. **Delivery & archive:** When all tasks finish, inspect `agent_teams_status`, present one consolidated report, and call `agent_teams_delete` to archive the complete history (members, DAG, outputs, mailboxes).
 """
 
 MEMBER_INSTRUCTIONS = (
@@ -26,6 +27,9 @@ MEMBER_INSTRUCTIONS = (
     "Your coordination tools are `agent_teams_update_task` (always passing `teamId`, `taskId`, your current `attemptId`, `status`, and `output`), "
     "`agent_teams_send_message` (requires `teamId`, `to`, `content`), `agent_teams_status` (requires `teamId`), and `agent_teams_claim_task`. "
     "IMPORTANT: Your assigned task is ALREADY claimed when your turn starts — do NOT call `agent_teams_claim_task` for it. "
+    "EFFICIENCY: Batch independent reads, searches, and shell checks (`&&` / `;` or parallel tool calls) into as few turns as possible instead of running one tiny command per turn. "
+    "Prefer fast DOM/script assertions over calling `vision_analyze` on many screenshots (limit vision checks to 2–3 key viewports). "
+    "Stay strictly within your task's `inScope` files so parallel teammates never collide. "
     "TOOL CALLING: Direct tools (`read_file`, `search_files`, `terminal`, `execute_code`, `skills_list`, `skill_view`, `tool_describe`, etc.) "
     "must be called DIRECTLY, never inside `tool_call`. "
     "If Hermes Progressive Tool Disclosure (`tool_search` / `tool_call`) defers `agent_teams_*` tools, invoke them via `tool_call` using "
