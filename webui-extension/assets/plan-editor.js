@@ -10,8 +10,86 @@
   }
 
   let cachedCatalog = null;
+  const reasoningCapsCache = new Map();
+  const FALLBACK_CAPS = {
+    supported_efforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    supports_reasoning_effort: true,
+    supports_thinking_toggle: true,
+  };
   const draftCache = new Map();
   const DRAFT_STORAGE_PREFIX = 'hat_staged_draft_v1_';
+
+  function parseRouteString(route) {
+    const raw = String(route || '').trim();
+    if (!raw) return { provider: '', model: '' };
+    if (raw.includes('::')) {
+      const idx = raw.indexOf('::');
+      return { provider: raw.slice(0, idx).trim(), model: raw.slice(idx + 2).trim() };
+    }
+    if (raw.includes('/')) {
+      const idx = raw.indexOf('/');
+      return { provider: raw.slice(0, idx).trim(), model: raw.slice(idx + 1).trim() };
+    }
+    return { provider: '', model: raw };
+  }
+
+  function normalizeModelId(model) {
+    const raw = String(model || '').trim();
+    // Strip `@provider:` prefix that /api/models returns on some codex/custom entries
+    if (raw.startsWith('@')) {
+      const lastColon = raw.lastIndexOf(':');
+      if (lastColon > 0) return raw.slice(lastColon + 1).trim();
+    }
+    return raw;
+  }
+
+  async function loadModelReasoningCaps(basePath, provider, model) {
+    const prov = String(provider || '').trim();
+    const mod = normalizeModelId(model);
+    if (!mod) return FALLBACK_CAPS;
+    const key = `${prov}::${mod}`;
+    if (reasoningCapsCache.has(key)) return reasoningCapsCache.get(key);
+    try {
+      const base = basePath || getAppBasePath();
+      const qs = new URLSearchParams();
+      qs.set('model', mod);
+      if (prov) qs.set('provider', prov);
+      const resp = await fetch(`${base}api/reasoning?${qs.toString()}`, { credentials: 'same-origin' });
+      if (!resp.ok) return FALLBACK_CAPS;
+      const data = await resp.json();
+      const caps = {
+        supported_efforts: Array.isArray(data.supported_efforts)
+          ? data.supported_efforts.map((s) => String(s || '').trim().toLowerCase()).filter(Boolean)
+          : [],
+        supports_reasoning_effort: Boolean(data.supports_reasoning_effort),
+        supports_thinking_toggle: Boolean(data.supports_thinking_toggle),
+      };
+      reasoningCapsCache.set(key, caps);
+      return caps;
+    } catch (_err) {
+      return FALLBACK_CAPS;
+    }
+  }
+
+  function getCachedReasoningCaps(provider, model) {
+    const prov = String(provider || '').trim();
+    const mod = normalizeModelId(model);
+    if (!mod) return FALLBACK_CAPS;
+    return reasoningCapsCache.get(`${prov}::${mod}`) || null;
+  }
+
+  function formatEffortLabel(level, tr) {
+    const map = {
+      none: tr('effortNone'),
+      minimal: tr('effortMinimal'),
+      low: tr('effortLow'),
+      medium: tr('effortMedium'),
+      high: tr('effortHigh'),
+      xhigh: tr('effortXhigh'),
+      max: tr('effortMax'),
+    };
+    return map[level] || `${tr('effortLabel')}: ${level}`;
+  }
 
   function loadCachedDraft(teamId, serverUpdatedAt) {
     if (!teamId) return null;
@@ -163,7 +241,34 @@
       opts.onDirtyChange(true);
     }
 
-    loadHermesModelCatalog(opts.appBasePath).then((catalog) => {
+    function effectiveMemberRoute(m) {
+      if (m && m.model) {
+        return { provider: m.provider || '', model: m.model };
+      }
+      return parseRouteString(opts.captainRoute || '');
+    }
+
+    async function prefetchAllMemberCaps() {
+      const seen = new Set();
+      const jobs = [];
+      const cap = parseRouteString(opts.captainRoute || '');
+      if (cap.model) {
+        const k = `${cap.provider}::${normalizeModelId(cap.model)}`;
+        seen.add(k);
+        jobs.push(loadModelReasoningCaps(opts.appBasePath, cap.provider, cap.model));
+      }
+      for (const m of draft.members) {
+        const r = effectiveMemberRoute(m);
+        if (!r.model) continue;
+        const k = `${r.provider}::${normalizeModelId(r.model)}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        jobs.push(loadModelReasoningCaps(opts.appBasePath, r.provider, r.model));
+      }
+      if (jobs.length) await Promise.all(jobs);
+    }
+
+    Promise.all([loadHermesModelCatalog(opts.appBasePath), prefetchAllMemberCaps()]).then(([catalog]) => {
       function paint() {
         const captainRoute = (opts.captainRoute || '').trim();
         const captainEffort = (opts.captainEffort || '').trim();
@@ -176,16 +281,6 @@
         const inheritEffortLabel = captainEffort
           ? `${tr('effortInherit')} (${captainEffort})`
           : tr('effortInherit');
-        const EFFORT_OPTS = [
-          { value: '', label: inheritEffortLabel },
-          { value: 'none', label: tr('effortNone') },
-          { value: 'minimal', label: tr('effortMinimal') },
-          { value: 'low', label: tr('effortLow') },
-          { value: 'medium', label: tr('effortMedium') },
-          { value: 'high', label: tr('effortHigh') },
-          { value: 'xhigh', label: tr('effortXhigh') },
-          { value: 'max', label: tr('effortMax') },
-        ];
 
         const captainRowHtml = `
           <div class="hat-plan-captain">
@@ -218,15 +313,32 @@
                 `<option value="${esc(currentVal)}" selected>${esc(m.provider ? `${m.provider} / ${m.model}` : m.model)}</option>`
               );
             }
+            const effRoute = effectiveMemberRoute(m);
+            const caps = getCachedReasoningCaps(effRoute.provider, effRoute.model) || FALLBACK_CAPS;
+            const allowedEfforts = Array.isArray(caps.supported_efforts) ? caps.supported_efforts : [];
+            const supportsAnyEffort = allowedEfforts.length > 0 || caps.supports_thinking_toggle;
             const curEffort = (m.reasoningEffort || '').trim().toLowerCase();
-            const effortOptions = EFFORT_OPTS.map(
-              (o) =>
-                `<option value="${esc(o.value)}"${o.value === curEffort ? ' selected' : ''}>${esc(o.label)}</option>`
-            );
-            if (curEffort && !EFFORT_OPTS.some((o) => o.value === curEffort)) {
-              effortOptions.push(
-                `<option value="${esc(curEffort)}" selected>${esc(curEffort)}</option>`
-              );
+            let effortOptionsHtml = '';
+            if (!supportsAnyEffort) {
+              effortOptionsHtml = `<option value="">${esc(tr('effortUnsupported'))}</option>`;
+            } else {
+              const optsList = [{ value: '', label: inheritEffortLabel }];
+              if (caps.supports_thinking_toggle) {
+                optsList.push({ value: 'none', label: formatEffortLabel('none', tr) });
+              }
+              for (const lvl of allowedEfforts) {
+                if (lvl === 'none') continue;
+                optsList.push({ value: lvl, label: formatEffortLabel(lvl, tr) });
+              }
+              if (curEffort && !optsList.some((o) => o.value === curEffort)) {
+                optsList.push({ value: curEffort, label: formatEffortLabel(curEffort, tr) });
+              }
+              effortOptionsHtml = optsList
+                .map(
+                  (o) =>
+                    `<option value="${esc(o.value)}"${o.value === curEffort ? ' selected' : ''}>${esc(o.label)}</option>`
+                )
+                .join('');
             }
             const imgUrl = art.memberArtUrl(m.name, m.role);
             return `
@@ -242,8 +354,8 @@
                     <select class="hat-select hat-select-model" data-field="route">
                       ${options.join('')}
                     </select>
-                    <select class="hat-select hat-select-effort" data-field="reasoningEffort" title="${esc(tr('effortLabel'))}" aria-label="${esc(tr('effortLabel'))}">
-                      ${effortOptions.join('')}
+                    <select class="hat-select hat-select-effort" data-field="reasoningEffort"${!supportsAnyEffort ? ' disabled' : ''} title="${esc(tr('effortLabel'))}" aria-label="${esc(tr('effortLabel'))}">
+                      ${effortOptionsHtml}
                     </select>
                   </div>
                 </div>
@@ -333,6 +445,21 @@
                   draft.members[idx].provider = parts[0] || '';
                   draft.members[idx].model = parts[1] || '';
                 }
+                setDirty(true);
+                const effRoute = effectiveMemberRoute(draft.members[idx]);
+                loadModelReasoningCaps(opts.appBasePath, effRoute.provider, effRoute.model).then((caps) => {
+                  const cur = (draft.members[idx] && draft.members[idx].reasoningEffort || '').trim().toLowerCase();
+                  if (cur) {
+                    const allowed = new Set(caps.supported_efforts || []);
+                    if (caps.supports_thinking_toggle) allowed.add('none');
+                    if (!allowed.has(cur)) {
+                      draft.members[idx].reasoningEffort = '';
+                      setDirty(true);
+                    }
+                  }
+                  paint();
+                });
+                return;
               } else {
                 draft.members[idx][f] = el.value;
               }
