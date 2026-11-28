@@ -171,6 +171,12 @@ class SubagentBridge:
         self._session_to_subagent: dict[str, str] = {}
         # Track terminal subagents already reported so we reconcile each handle once.
         self._terminal_reported: set[str] = set()
+        # (team_id, member_name) -> latest bound subagent_id (prevents old exiting turns from triggering recovery)
+        self._latest_subagent_for_member: dict[tuple[str, str], str] = {}
+        # subagent_id -> (wake_directive, workspace) for P2P steers in case the child exits before reading them
+        self._pending_steers: dict[str, tuple[dict[str, Any], str]] = {}
+        # Bounded recovery guard: at most 1 automatic recovery per (team_id, member_name, task_id)
+        self._auto_recovered_tasks: set[tuple[str, str, str]] = set()
         self._captain_agents: dict[str, Any] = {}  # captain_session_id -> AIAgent
         self._last_captain_agent: Any = None
         self._lock = threading.Lock()
@@ -524,8 +530,128 @@ class SubagentBridge:
                         runtime_state=r_state,
                         error=err_msg[:350] if err_msg else None,
                     )
+
+                    if state_name == "SUCCEEDED":
+                        with self._lock:
+                            pending_steer = self._pending_steers.pop(sid, None)
+                            is_latest = self._latest_subagent_for_member.get((team_id, member_name)) == sid
+                        if is_latest:
+                            self._maybe_recover_stalled_member(
+                                team_id=team_id,
+                                member_name=member_name,
+                                workspace=workspace,
+                                captain_sid=captain_sid,
+                                pending_steer=pending_steer,
+                            )
+                    else:
+                        with self._lock:
+                            self._pending_steers.pop(sid, None)
             except Exception as exc:  # noqa: BLE001
                 _log.debug("Reconcile check failed for %s: %s", sid, exc)
+
+    def _maybe_recover_stalled_member(
+        self,
+        *,
+        team_id: str,
+        member_name: str,
+        workspace: str,
+        captain_sid: str,
+        pending_steer: tuple[dict[str, Any], str] | None,
+    ) -> None:
+        """If a subagent exited SUCCEEDED while still owning a claimed/in_progress task, wake it cleanly once."""
+        try:
+            q = f"/api/v1/state?include_archived=0"
+            if workspace:
+                import urllib.parse
+
+                q += f"&workspace={urllib.parse.quote(workspace, safe='')}"
+            state = self.client._request("GET", q)
+            teams = state.get("teams") if isinstance(state, dict) else None
+            if not isinstance(teams, list):
+                return
+            team = next((t for t in teams if isinstance(t, dict) and t.get("id") == team_id), None)
+            if not team or team.get("phase") != "running" or team.get("halted") or team.get("archived"):
+                return
+            open_task = next(
+                (
+                    tk
+                    for tk in (team.get("tasks") or [])
+                    if isinstance(tk, dict)
+                    and tk.get("assignee") == member_name
+                    and tk.get("status") in {"claimed", "in_progress"}
+                ),
+                None,
+            )
+            if not open_task:
+                return
+            tid = str(open_task.get("id") or "")
+            if not tid:
+                return
+            guard_key = (team_id, member_name, tid)
+            with self._lock:
+                if guard_key in self._auto_recovered_tasks:
+                    return
+                self._auto_recovered_tasks.add(guard_key)
+
+            member_obj = next(
+                (m for m in (team.get("members") or []) if isinstance(m, dict) and m.get("name") == member_name),
+                {},
+            )
+            if pending_steer is not None:
+                steer_d, steer_ws = pending_steer
+                goal_msg = str(steer_d.get("message") or "")
+                role = str(steer_d.get("role") or member_obj.get("role") or "teammate")
+                provider = steer_d.get("provider") or member_obj.get("provider")
+                model = steer_d.get("model") or member_obj.get("model")
+                effort = steer_d.get("reasoning_effort") or steer_d.get("reasoningEffort") or member_obj.get("reasoningEffort")
+                exec_prompt = steer_d.get("execution_prompt") or steer_d.get("executionPrompt")
+                tool_filter = steer_d.get("tool_filter") or steer_d.get("toolFilter")
+                ws = steer_ws or workspace
+            else:
+                subj = str(open_task.get("subject") or tid)
+                goal_msg = (
+                    f"[Auto-Recovery] Your previous turn exited while task '{tid}' ({subj}) is still "
+                    f"status='{open_task.get('status')}' assigned to you in team '{team_id}'. "
+                    f"Call `agent_teams_status(teamId=\"{team_id}\")` to confirm your current `attemptId`, "
+                    f"finish any remaining work for '{tid}', and report completion with `agent_teams_update_task`."
+                )
+                role = str(member_obj.get("role") or "teammate")
+                provider = member_obj.get("provider")
+                model = member_obj.get("model")
+                effort = member_obj.get("reasoningEffort")
+                exec_prompt = None
+                tool_filter = None
+                ws = workspace
+
+            _log.warning(
+                "Auto-recovering stalled member %s/%s on open task %s after prior turn exited SUCCEEDED",
+                team_id,
+                member_name,
+                tid,
+            )
+            new_sid, err = self._launch_member_turn(
+                team_id=team_id,
+                captain_session_id=captain_sid,
+                member_name=member_name,
+                role=role,
+                provider=provider,
+                model=model,
+                reasoning_effort=effort,
+                execution_prompt=exec_prompt,
+                tool_filter=tool_filter,
+                goal_prompt=goal_msg,
+                workspace=ws,
+            )
+            if new_sid or err:
+                self.client.bind_member(
+                    workspace=ws,
+                    team_id=team_id,
+                    member_name=member_name,
+                    subagent_id=new_sid,
+                    spawn_error=err,
+                )
+        except Exception as exc:  # noqa: BLE001
+            _log.debug("Auto-recovery check failed for %s/%s: %s", team_id, member_name, exc)
 
     def execute_directives(self, directives: list[dict[str, Any]], *, workspace: str) -> None:
         for directive in directives:
@@ -610,6 +736,7 @@ class SubagentBridge:
                     with self._lock:
                         self._handles[subagent_id] = handle
                         self._terminal_reported.discard(subagent_id)
+                        self._latest_subagent_for_member[(team_id, member_name)] = subagent_id
                         self._member_lookup[subagent_id] = (
                             team_id,
                             member_name,
@@ -695,17 +822,28 @@ class SubagentBridge:
         with self._lock:
             handle = self._handles.get(subagent_id)
 
-        # 1. If the child is actively running right now, steer it live.
-        if lifecycle is not None and handle is not None:
+        # A WakeMember carrying a new `task_id` + `attempt_id` is emitted right after the worker
+        # completed its previous task while its old turn is still exiting. Never `steer()` a new
+        # task assignment into a dying turn (Hermes drops the steer when the old turn finishes its
+        # final reply); always launch a clean fresh turn with history=0 for the new task.
+        is_new_task_assignment = bool(
+            (d.get("task_id") or d.get("taskId"))
+            and (d.get("attempt_id") or d.get("attemptId"))
+        )
+
+        # 1. For live P2P messages (not a new task assignment), steer an actively running child.
+        if not is_new_task_assignment and lifecycle is not None and handle is not None:
             try:
                 with _maybe_bind_parent(parent):
                     if lifecycle.steer(handle, message):
+                        with self._lock:
+                            self._pending_steers[subagent_id] = (dict(d), workspace)
                         return
             except Exception:  # noqa: BLE001
                 pass
 
-        # 2. If the previous turn finished cleanly, launch a fresh turn for this member
-        #    on the same team/role/model and re-bind its new subagent_id.
+        # 2. Launch a fresh turn for this member (new task assignment or previously finished turn)
+        #    on the same team/role/model/effort and re-bind its new subagent_id.
         new_sid, err = self._launch_member_turn(
             team_id=team_id,
             captain_session_id=captain_sid,
