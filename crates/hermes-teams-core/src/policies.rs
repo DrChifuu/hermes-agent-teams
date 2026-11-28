@@ -156,6 +156,8 @@ pub fn builtin_tool_policies() -> BTreeMap<String, RawToolPolicy> {
     map.insert("reviewer-readonly".to_string(), readonly);
     map.insert("strict-readonly".to_string(), strict_readonly);
     map.insert("coding".to_string(), coding.clone());
+    map.insert("deploy".to_string(), coding.clone());
+    map.insert("deployer".to_string(), coding.clone());
     map.insert("full".to_string(), coding);
     map
 }

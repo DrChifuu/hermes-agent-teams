@@ -4,13 +4,13 @@
   "version": "0.1.0",
   "description": "DSH Agent Teams visual workspace ported natively to Hermes WebUI with Ferris Rust-crab worker mascots, interactive task DAG, staged plan editor, and Rust sidecar SSE streaming.",
   "scripts": [
-    "assets/artwork.js?v=17",
-    "assets/dag-renderer.js?v=17",
-    "assets/plan-editor.js?v=17",
-    "assets/agent-teams.js?v=17"
+    "assets/artwork.js?v=18",
+    "assets/dag-renderer.js?v=18",
+    "assets/plan-editor.js?v=18",
+    "assets/agent-teams.js?v=18"
   ],
   "stylesheets": [
-    "assets/agent-teams.css?v=17"
+    "assets/agent-teams.css?v=18"
   ],
   "sidecar": {
     "type": "loopback",

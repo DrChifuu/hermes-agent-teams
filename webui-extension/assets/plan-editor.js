@@ -181,7 +181,10 @@
             <div class="hat-plan-section">
               <div class="hat-plan-section-head">
                 <span>${esc(tr('roster'))} (${draft.members.length + 1})</span>
-                <button type="button" class="hat-btn-ghost" data-action="add-member">+ ${esc(tr('addMember'))}</button>
+                <div style="display:inline-flex;gap:4px;">
+                  <button type="button" class="hat-btn-ghost" data-action="add-deployer" title="Add dedicated deploy worker">+ Deployer 🚀</button>
+                  <button type="button" class="hat-btn-ghost" data-action="add-member">+ ${esc(tr('addMember'))}</button>
+                </div>
               </div>
               <div class="hat-plan-list">${captainRowHtml}${memberRows}</div>
             </div>
@@ -265,6 +268,22 @@
             draft.tasks.splice(idx, 1);
             paint();
           });
+        });
+
+        container.querySelector('[data-action="add-deployer"]').addEventListener('click', () => {
+          setDirty(true);
+          const baseName = draft.members.some((m) => m.name === 'deployer')
+            ? `deployer-${draft.members.length + 1}`
+            : 'deployer';
+          draft.members.push({
+            name: baseName,
+            role: 'deployer',
+            provider: '',
+            model: '',
+            reasoningEffort: '',
+            toolPolicy: 'deploy',
+          });
+          paint();
         });
 
         container.querySelector('[data-action="add-member"]').addEventListener('click', () => {
