@@ -165,7 +165,8 @@
         const provider = g.provider_id || g.provider || '';
         const list = [].concat(g.models || [], g.extra_models || []);
         for (const m of list) {
-          const id = typeof m === 'string' ? m : m && (m.id || m.name);
+          const rawId = typeof m === 'string' ? m : m && (m.id || m.name);
+          const id = normalizeModelId(rawId);
           if (!id) continue;
           out.push({
             provider,
@@ -194,7 +195,7 @@
             name: m.name,
             role: m.role || '',
             provider: m.provider || '',
-            model: m.model || '',
+            model: normalizeModelId(m.model || ''),
             reasoningEffort: m.reasoningEffort || '',
             executionPrompt: m.executionPrompt || undefined,
             toolPolicy: m.toolPolicy || undefined,
@@ -628,7 +629,7 @@
           name: m.name.trim(),
           role: m.role.trim() || undefined,
           provider: m.provider.trim() || undefined,
-          model: m.model.trim() || undefined,
+          model: normalizeModelId(m.model) || undefined,
           reasoningEffort: m.reasoningEffort.trim() || undefined,
           executionPrompt: m.executionPrompt,
           toolPolicy: m.toolPolicy,

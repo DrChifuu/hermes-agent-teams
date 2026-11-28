@@ -702,6 +702,18 @@ class SubagentBridge:
 
         clean_effort = reasoning_effort.strip() if isinstance(reasoning_effort, str) and reasoning_effort.strip() else None
 
+        # Hermes /api/models prefixes some model IDs with `@<provider>:` (e.g. `@openai-codex:gpt-6.2-sol`,
+        # `@custom:opencode-go-free:hungerg-free`). Upstream provider APIs reject the `@provider:` prefix,
+        # so always strip it before calling lifecycle.launch().
+        clean_provider = provider.strip() if isinstance(provider, str) and provider.strip() else None
+        clean_model = model.strip() if isinstance(model, str) and model.strip() else None
+        if clean_model and clean_model.startswith("@") and ":" in clean_model:
+            prefix, bare = clean_model[1:].rsplit(":", 1)
+            if bare.strip():
+                clean_model = bare.strip()
+                if not clean_provider and prefix.strip():
+                    clean_provider = prefix.strip()
+
         try:
             lifecycle = getattr(self.ctx, "subagent_lifecycle", None)
             if lifecycle is not None:
@@ -723,10 +735,10 @@ class SubagentBridge:
                     "role": "leaf",
                     "metadata": meta,
                 }
-                if model:
-                    req["model"] = model
-                if provider:
-                    req["provider"] = provider
+                if clean_model:
+                    req["model"] = clean_model
+                if clean_provider:
+                    req["provider"] = clean_provider
 
                 with self._launch_lock, _maybe_bind_parent(parent), _override_parent_reasoning(parent, clean_effort):
                     handle = lifecycle.launch(req)
@@ -749,8 +761,8 @@ class SubagentBridge:
                         subagent_id,
                         team_id,
                         member_name,
-                        provider or "inherit",
-                        model or "inherit",
+                        clean_provider or "inherit",
+                        clean_model or "inherit",
                         clean_effort or "inherit",
                     )
             else:
