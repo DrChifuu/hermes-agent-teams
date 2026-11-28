@@ -92,12 +92,26 @@
     loadHermesModelCatalog(opts.appBasePath).then((catalog) => {
       function paint() {
         const captainRoute = (opts.captainRoute || '').trim();
+        const captainEffort = (opts.captainEffort || '').trim();
         const shortCap = captainRoute && window.HermesTeamsDag
           ? window.HermesTeamsDag.shortModel(captainRoute)
           : captainRoute;
         const inheritLabel = shortCap
           ? `${tr('inheritCaptainModel')} (${shortCap})`
           : tr('inheritCaptainModel');
+        const inheritEffortLabel = captainEffort
+          ? `${tr('effortInherit')} (${captainEffort})`
+          : tr('effortInherit');
+        const EFFORT_OPTS = [
+          { value: '', label: inheritEffortLabel },
+          { value: 'none', label: tr('effortNone') },
+          { value: 'minimal', label: tr('effortMinimal') },
+          { value: 'low', label: tr('effortLow') },
+          { value: 'medium', label: tr('effortMedium') },
+          { value: 'high', label: tr('effortHigh') },
+          { value: 'xhigh', label: tr('effortXhigh') },
+          { value: 'max', label: tr('effortMax') },
+        ];
 
         const captainRowHtml = `
           <div class="hat-plan-captain">
@@ -108,7 +122,7 @@
                 <span class="hat-member-role">${esc(tr('captainSub'))}</span>
                 ${
                   shortCap
-                    ? `<span class="hat-model-pill hat-captain-model" title="${esc(captainRoute)}">${esc(shortCap)}</span>`
+                    ? `<span class="hat-model-pill hat-captain-model" title="${esc(captainRoute)}">${esc(shortCap)}${captainEffort ? ` · ${esc(captainEffort)}` : ''}</span>`
                     : `<span class="hat-model-pill hat-model-pending">${esc(tr('modelDetecting'))}</span>`
                 }
               </div>
@@ -130,6 +144,16 @@
                 `<option value="${esc(currentVal)}" selected>${esc(m.provider ? `${m.provider} / ${m.model}` : m.model)}</option>`
               );
             }
+            const curEffort = (m.reasoningEffort || '').trim().toLowerCase();
+            const effortOptions = EFFORT_OPTS.map(
+              (o) =>
+                `<option value="${esc(o.value)}"${o.value === curEffort ? ' selected' : ''}>${esc(o.label)}</option>`
+            );
+            if (curEffort && !EFFORT_OPTS.some((o) => o.value === curEffort)) {
+              effortOptions.push(
+                `<option value="${esc(curEffort)}" selected>${esc(curEffort)}</option>`
+              );
+            }
             const imgUrl = art.memberArtUrl(m.name, m.role);
             return `
               <div class="hat-plan-member" data-midx="${idx}">
@@ -140,9 +164,14 @@
                     <input class="hat-input hat-input-role" data-field="role" value="${esc(m.role)}" placeholder="role (engineer, qa, security...)" />
                     <button type="button" class="hat-btn-icon hat-remove-member" title="Remove">✕</button>
                   </div>
-                  <select class="hat-select hat-select-model" data-field="route">
-                    ${options.join('')}
-                  </select>
+                  <div class="hat-plan-row-model">
+                    <select class="hat-select hat-select-model" data-field="route">
+                      ${options.join('')}
+                    </select>
+                    <select class="hat-select hat-select-effort" data-field="reasoningEffort" title="${esc(tr('effortLabel'))}" aria-label="${esc(tr('effortLabel'))}">
+                      ${effortOptions.join('')}
+                    </select>
+                  </div>
                 </div>
               </div>`;
           })

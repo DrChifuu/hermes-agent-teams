@@ -82,6 +82,15 @@
       discardPlan: 'Descartar',
       confirmDiscard: 'Confirmar descarte',
       inheritCaptainModel: 'Heredar modelo del Capitán',
+      effortLabel: 'Esfuerzo de razonamiento',
+      effortInherit: 'Esfuerzo: heredar',
+      effortNone: 'Sin razonamiento',
+      effortMinimal: 'Esfuerzo: mínimo',
+      effortLow: 'Esfuerzo: bajo',
+      effortMedium: 'Esfuerzo: medio',
+      effortHigh: 'Esfuerzo: alto',
+      effortXhigh: 'Esfuerzo: muy alto',
+      effortMax: 'Esfuerzo: máximo',
       unlocks: 'Al completar desbloquea',
       waitingOn: 'Esperando a',
       emptyTitle: 'Sin equipos activos en esta sesión',
@@ -170,6 +179,15 @@
       discardPlan: 'Discard',
       confirmDiscard: 'Confirm discard',
       inheritCaptainModel: 'Inherit Captain model',
+      effortLabel: 'Reasoning effort',
+      effortInherit: 'Effort: inherit',
+      effortNone: 'Reasoning: off',
+      effortMinimal: 'Effort: minimal',
+      effortLow: 'Effort: low',
+      effortMedium: 'Effort: medium',
+      effortHigh: 'Effort: high',
+      effortXhigh: 'Effort: xhigh',
+      effortMax: 'Effort: max',
       unlocks: 'Unlocks',
       waitingOn: 'Waiting on',
       emptyTitle: 'No active team in this session',
@@ -1195,6 +1213,7 @@
       window.HermesTeamsPlanEditor.renderPlanEditor(body, team, {
         tr,
         captainRoute: resolveCaptainRoute(team),
+        captainEffort: team.captainReasoningEffort || '',
         appBasePath: getAppBasePath(),
         onDirtyChange: (isDirty) => {
           uiState.editorDirty = !!isDirty;
@@ -1345,7 +1364,7 @@
               <div class="hat-member-top">
                 <span class="hat-member-name">${esc(m.name)}</span>
                 <span class="hat-member-role">${esc(m.role)}</span>
-                ${route ? `<span class="hat-model-pill" title="${esc(route)}">${esc(window.HermesTeamsDag.shortModel(route))}</span>` : ''}
+                ${route ? `<span class="hat-model-pill" title="${esc(route)}${m.reasoningEffort ? ` · ${esc(m.reasoningEffort)}` : ''}">${esc(window.HermesTeamsDag.shortModel(route))}${m.reasoningEffort ? ` · ${esc(m.reasoningEffort)}` : ''}</span>` : ''}
               </div>
               <div class="hat-member-state${m.spawnError ? ' is-error' : ''}">${esc(m.currentTask || m.spawnError || (allDone ? tr('statusDone') : m.status))}</div>
               ${chips ? `<div class="hat-member-tasks"><span class="hat-member-role">${esc(tr('dispatched'))}</span>${chips}</div>` : ''}
@@ -1373,7 +1392,7 @@
               <div class="hat-captain-model-row">
                 ${
                   captainRoute
-                    ? `<span class="hat-model-pill hat-captain-model" title="${esc(captainRoute)}">${esc(window.HermesTeamsDag.shortModel(captainRoute))}</span>`
+                    ? `<span class="hat-model-pill hat-captain-model" title="${esc(captainRoute)}${team.captainReasoningEffort ? ` · ${esc(team.captainReasoningEffort)}` : ''}">${esc(window.HermesTeamsDag.shortModel(captainRoute))}${team.captainReasoningEffort ? ` · ${esc(team.captainReasoningEffort)}` : ''}</span>`
                     : `<span class="hat-model-pill hat-model-pending">${esc(tr('modelDetecting'))}</span>`
                 }
               </div>
@@ -1583,7 +1602,7 @@
                 <div class="hat-member-top">
                   <span class="hat-member-name">${esc(m.name)}</span>
                   <span class="hat-member-role">${esc(m.role)}</span>
-                  ${route ? `<span class="hat-model-pill" title="${esc(route)}">${esc(window.HermesTeamsDag.shortModel(route))}</span>` : ''}
+                  ${route ? `<span class="hat-model-pill" title="${esc(route)}${m.reasoningEffort ? ` · ${esc(m.reasoningEffort)}` : ''}">${esc(window.HermesTeamsDag.shortModel(route))}${m.reasoningEffort ? ` · ${esc(m.reasoningEffort)}` : ''}</span>` : ''}
                 </div>
                 <div class="hat-live-sub-id">${esc((rt && rt.subagentId) || m.id || 'pendiente')}</div>
               </div>

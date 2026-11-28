@@ -1006,6 +1006,22 @@
   gap: 6px;
 }
 
+.hat-plan-row-model {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.hat-plan-row-model .hat-select-model {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.hat-plan-row-model .hat-select-effort {
+  flex: 0 0 158px;
+  min-width: 0;
+}
+
 .hat-plan-task {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr) minmax(110px, 145px) 92px 26px;
@@ -1050,6 +1066,12 @@
   }
   .hat-plan-row-top {
     flex-wrap: wrap;
+  }
+  .hat-plan-row-model {
+    flex-wrap: wrap;
+  }
+  .hat-plan-row-model .hat-select-effort {
+    flex: 1 1 140px;
   }
   .hat-plan-row-top .hat-input {
     flex: 1 1 110px;

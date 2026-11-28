@@ -38,6 +38,44 @@ def _maybe_bind_parent(parent: Any):
         yield
 
 
+@contextlib.contextmanager
+def _override_parent_reasoning(parent: Any, reasoning_effort: str | None):
+    """Temporarily override `parent.reasoning_config` during synchronous `lifecycle.launch(req)`.
+
+    Hermes's `SubagentLaunchRequest` does not expose a `reasoning_effort` field; `_child_reasoning`
+    reads `parent.reasoning_config` while building the child `AIAgent` synchronously on the calling
+    thread before submitting to the executor. Restoring immediately in `finally` keeps the Captain's
+    own reasoning effort untouched while giving each teammate its chosen effort level.
+    """
+    effort = (reasoning_effort or "").strip() if isinstance(reasoning_effort, str) else ""
+    if parent is None or not effort:
+        yield
+        return
+    try:
+        from hermes_constants import parse_reasoning_effort
+
+        parsed = parse_reasoning_effort(effort)
+    except Exception:  # noqa: BLE001
+        parsed = None
+    if parsed is None:
+        yield
+        return
+
+    sentinel = object()
+    prev = getattr(parent, "reasoning_config", sentinel)
+    try:
+        setattr(parent, "reasoning_config", parsed)
+        yield
+    finally:
+        try:
+            if prev is sentinel:
+                delattr(parent, "reasoning_config")
+            else:
+                setattr(parent, "reasoning_config", prev)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 _FALLBACK_PARENT_TOOLSETS: tuple[str, ...] = (
     "terminal",
     "file",
@@ -136,6 +174,7 @@ class SubagentBridge:
         self._captain_agents: dict[str, Any] = {}  # captain_session_id -> AIAgent
         self._last_captain_agent: Any = None
         self._lock = threading.Lock()
+        self._launch_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._poller: threading.Thread | None = None
         self._status_tick: int = 0
@@ -512,6 +551,7 @@ class SubagentBridge:
         role: str,
         provider: str | None,
         model: str | None,
+        reasoning_effort: str | None = None,
         execution_prompt: str | None,
         tool_filter: dict[str, Any] | None,
         goal_prompt: str,
@@ -534,30 +574,35 @@ class SubagentBridge:
         subagent_id = ""
         spawn_error: str | None = None
 
+        clean_effort = reasoning_effort.strip() if isinstance(reasoning_effort, str) and reasoning_effort.strip() else None
+
         try:
             lifecycle = getattr(self.ctx, "subagent_lifecycle", None)
             if lifecycle is not None:
                 # Comply strictly with Hermes SubagentLaunchRequest validation:
                 # - role must be 'leaf' or 'orchestrator'
                 # - working_directory and blocked_tools must remain omitted/empty
+                meta: dict[str, Any] = {
+                    "hermes_agent_teams": True,
+                    "team_id": team_id,
+                    "member_name": member_name,
+                    "team_role": role,
+                    "workspace": workspace,
+                }
+                if clean_effort:
+                    meta["reasoning_effort"] = clean_effort
                 req: dict[str, Any] = {
                     "goal": goal_prompt,
                     "context": full_context,
                     "role": "leaf",
-                    "metadata": {
-                        "hermes_agent_teams": True,
-                        "team_id": team_id,
-                        "member_name": member_name,
-                        "team_role": role,
-                        "workspace": workspace,
-                    },
+                    "metadata": meta,
                 }
                 if model:
                     req["model"] = model
                 if provider:
                     req["provider"] = provider
 
-                with _maybe_bind_parent(parent):
+                with self._launch_lock, _maybe_bind_parent(parent), _override_parent_reasoning(parent, clean_effort):
                     handle = lifecycle.launch(req)
 
                 subagent_id = str(getattr(handle, "subagent_id", "") or "")
@@ -573,12 +618,13 @@ class SubagentBridge:
                             captain_session_id,
                         )
                     _log.info(
-                        "Spawned Hermes subagent %s for team=%s member=%s (%s/%s)",
+                        "Spawned Hermes subagent %s for team=%s member=%s (%s/%s effort=%s)",
                         subagent_id,
                         team_id,
                         member_name,
                         provider or "inherit",
                         model or "inherit",
+                        clean_effort or "inherit",
                     )
             else:
                 raw = self.ctx.dispatch_tool(
@@ -605,6 +651,7 @@ class SubagentBridge:
         role = str(d.get("role") or "teammate")
         provider = d.get("provider")
         model = d.get("model")
+        reasoning_effort = d.get("reasoning_effort") or d.get("reasoningEffort")
         execution_prompt = d.get("execution_prompt") or d.get("executionPrompt")
         initial_prompt = str(d.get("initial_prompt") or d.get("initialPrompt") or "")
         tool_filter = d.get("tool_filter") or d.get("toolFilter")
@@ -616,6 +663,7 @@ class SubagentBridge:
             role=role,
             provider=provider,
             model=model,
+            reasoning_effort=reasoning_effort,
             execution_prompt=execution_prompt,
             tool_filter=tool_filter,
             goal_prompt=initial_prompt,
@@ -665,6 +713,7 @@ class SubagentBridge:
             role=str(d.get("role") or "teammate"),
             provider=d.get("provider"),
             model=d.get("model"),
+            reasoning_effort=d.get("reasoning_effort") or d.get("reasoningEffort"),
             execution_prompt=d.get("execution_prompt") or d.get("executionPrompt"),
             tool_filter=d.get("tool_filter") or d.get("toolFilter"),
             goal_prompt=message,
