@@ -47,10 +47,23 @@
       dagCompactHeight: 'Compactar',
       noTasks: 'Aún no hay tareas planificadas.',
       unassigned: 'sin asignar',
-      stopTeam: 'Detener equipo',
-      confirmStop: '¿Confirmar detención?',
+      stopTeam: 'Pausar',
+      confirmStop: '¿Confirmar pausa?',
+      resumeTeam: 'Reanudar',
       deleteTeam: 'Eliminar',
       confirmDelete: '¿Confirmar borrado?',
+      editMember: 'Cambiar modelo / esfuerzo',
+      save: 'Guardar',
+      cancel: 'Cancelar',
+      resolutionTab: 'Resolución',
+      resolutionTitle: 'Resolución del equipo',
+      resolutionSummaryLabel: 'Conclusión / a qué se llegó',
+      resolutionPlaceholder: 'Escribe o edita aquí a qué se llegó, decisiones tomadas o próximos pasos…',
+      resolutionSave: 'Guardar resolución',
+      resolutionSaved: 'Resolución guardada',
+      resolutionTasksTitle: 'Resultados entregados por tarea',
+      resolutionCloseHint: 'Este equipo queda abierto hasta que decidas cerrarlo y borrarlo manualmente.',
+      resolutionEmpty: 'Aún no hay entregables registrados.',
       modelDetecting: 'detectando modelo…',
       chatPlanReady: 'Esquema de equipo listo para aprobar',
       chatReviewApprove: 'Revisar y aprobar',
@@ -145,10 +158,23 @@
       dagCompactHeight: 'Compact',
       noTasks: 'No tasks planned yet.',
       unassigned: 'unassigned',
-      stopTeam: 'Stop team',
-      confirmStop: 'Confirm stop?',
+      stopTeam: 'Pause',
+      confirmStop: 'Confirm pause?',
+      resumeTeam: 'Resume',
       deleteTeam: 'Delete',
       confirmDelete: 'Confirm delete?',
+      editMember: 'Change model / effort',
+      save: 'Save',
+      cancel: 'Cancel',
+      resolutionTab: 'Resolution',
+      resolutionTitle: 'Team Resolution',
+      resolutionSummaryLabel: 'Conclusion / Outcome',
+      resolutionPlaceholder: 'Write or edit the outcome reached, key decisions, or next steps…',
+      resolutionSave: 'Save resolution',
+      resolutionSaved: 'Resolution saved',
+      resolutionTasksTitle: 'Delivered Task Outputs',
+      resolutionCloseHint: 'This team stays open until you manually close and delete it.',
+      resolutionEmpty: 'No task outputs recorded yet.',
       modelDetecting: 'detecting model…',
       chatPlanReady: 'Team plan ready for approval',
       chatReviewApprove: 'Review & Approve',
@@ -310,6 +336,11 @@
     liveMemberFilter: 'all',
     stopArmed: false,
     deleteArmed: false,
+    editingMember: null,
+    resolutionDirty: false,
+    resolutionDraft: '',
+    resolutionSavedAt: 0,
+    modelCatalog: [],
     archiveDeleteArmedId: null,
     archiveClearAllArmed: false,
     fullAccess: false,
@@ -551,7 +582,14 @@
           (panel.contains(document.activeElement) &&
             document.activeElement &&
             document.activeElement.closest('.hat-plan-shell')));
-      if (!forceRender && editingStaged) return;
+      const editingInlineMember = uiState.tab === 'active' && !!uiState.editingMember;
+      const editingResolution =
+        uiState.tab === 'resolution' &&
+        (uiState.resolutionDirty ||
+          (panel.contains(document.activeElement) &&
+            document.activeElement &&
+            document.activeElement.tagName === 'TEXTAREA'));
+      if (!forceRender && (editingStaged || editingInlineMember || editingResolution)) return;
 
       render();
     } catch (_err) {
@@ -749,7 +787,23 @@
         body: JSON.stringify({
           teamId: team.id,
           workspace: team.workspace,
-          reason: 'Stopped from Hermes WebUI',
+          reason: 'Paused from Hermes WebUI',
+        }),
+      });
+      await refreshState(true);
+      return;
+    }
+    if (action === 'resume' && team) {
+      ev.stopPropagation();
+      uiState.stopArmed = false;
+      uiState.deleteArmed = false;
+      await apiFetch('/api/v1/team/resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          teamId: team.id,
+          workspace: team.workspace,
+          reason: 'Resumed from Hermes WebUI',
         }),
       });
       await refreshState(true);
@@ -1000,7 +1054,7 @@
     const list =
       uiState.tab === 'archive'
         ? archivedTeams
-        : uiState.tab === 'live'
+        : uiState.tab === 'live' || uiState.tab === 'resolution'
           ? activeTeams.length
             ? activeTeams
             : archivedTeams
@@ -1100,10 +1154,16 @@
     };
 
     const showStop = team && !team.archived && !team.halted && team.phase !== 'staged' && !isTeamFinished(team);
+    const showResume = team && !team.archived && team.halted && team.phase !== 'staged';
+    const showResolutionTab =
+      !!team && (isTeamFinished(team) || !!team.archived || !!(team.resolution && team.resolution.trim()));
+    if (uiState.tab === 'resolution' && !showResolutionTab) {
+      uiState.tab = 'active';
+    }
     const switcherList =
       uiState.tab === 'archive'
         ? archivedTeams
-        : uiState.tab === 'live'
+        : uiState.tab === 'live' || uiState.tab === 'resolution'
           ? activeTeams.concat(archivedTeams)
           : activeTeams;
     const liveActiveCount = activeTeams.reduce(
@@ -1146,8 +1206,15 @@
             </button>
             ${
               showStop
-                ? `<button type="button" class="hat-icon-btn is-danger" data-action="stop">${esc(
+                ? `<button type="button" class="hat-icon-btn is-danger" data-action="stop">⏸ ${esc(
                     uiState.stopArmed ? tr('confirmStop') : tr('stopTeam')
+                  )}</button>`
+                : ''
+            }
+            ${
+              showResume
+                ? `<button type="button" class="hat-icon-btn hat-btn-resume" data-action="resume">▶ ${esc(
+                    tr('resumeTeam')
                   )}</button>`
                 : ''
             }
@@ -1165,6 +1232,13 @@
         <button type="button" class="hat-tab${uiState.tab === 'active' ? ' is-active' : ''}" data-tab="active">
           ${esc(tr('activeTab'))} (${activeTeams.length})
         </button>
+        ${
+          showResolutionTab
+            ? `<button type="button" class="hat-tab hat-tab-resolution${uiState.tab === 'resolution' ? ' is-active' : ''}" data-tab="resolution">
+                ✓ ${esc(tr('resolutionTab'))}
+              </button>`
+            : ''
+        }
         <button type="button" class="hat-tab${uiState.tab === 'archive' ? ' is-active' : ''}" data-tab="archive">
           ${esc(tr('archiveTab'))} (${uiState.archivedCount || archivedTeams.length})
         </button>
@@ -1194,6 +1268,12 @@
 
     if (uiState.tab === 'live') {
       renderLiveWorkspace(body, team);
+      restoreScroll();
+      return;
+    }
+
+    if (uiState.tab === 'resolution') {
+      renderResolutionWorkspace(body, team);
       restoreScroll();
       return;
     }
@@ -1359,8 +1439,74 @@
           })
           .join('');
 
+        const isEditingThis =
+          !team.archived &&
+          uiState.editingMember &&
+          uiState.editingMember.teamId === team.id &&
+          uiState.editingMember.name === m.name;
+        const editBtnHtml = !team.archived
+          ? `<button type="button" class="hat-member-edit-btn" data-action="edit-member" data-member-name="${esc(m.name)}" title="${esc(tr('editMember'))}" aria-label="${esc(tr('editMember'))}">✎</button>`
+          : '';
+
+        let inlineEditorHtml = '';
+        if (isEditingThis) {
+          const ed = uiState.editingMember;
+          const pe = window.HermesTeamsPlanEditor;
+          const curVal = ed.model ? `${ed.provider || ''}::${ed.model}` : '';
+          const catalog = uiState.modelCatalog || [];
+          const capShort = captainRoute && window.HermesTeamsDag ? window.HermesTeamsDag.shortModel(captainRoute) : captainRoute;
+          const inheritModelLbl = capShort ? `${tr('inheritCaptainModel')} (${capShort})` : tr('inheritCaptainModel');
+          const modelOpts = [
+            `<option value="">${esc(inheritModelLbl)}</option>`,
+            ...catalog.map(
+              (c) => `<option value="${esc(c.value)}"${c.value === curVal ? ' selected' : ''}>${esc(c.label)}</option>`
+            ),
+          ];
+          if (curVal && !catalog.some((c) => c.value === curVal)) {
+            modelOpts.push(
+              `<option value="${esc(curVal)}" selected>${esc(ed.provider ? `${ed.provider} / ${ed.model}` : ed.model)}</option>`
+            );
+          }
+          const effTarget = ed.model ? { provider: ed.provider, model: ed.model } : pe.parseRouteString(captainRoute);
+          const caps = pe.getCachedReasoningCaps(effTarget.provider, effTarget.model) || {
+            supported_efforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+            supports_thinking_toggle: true,
+          };
+          const allowedEff = Array.isArray(caps.supported_efforts) ? caps.supported_efforts : [];
+          const supportsAny = allowedEff.length > 0 || caps.supports_thinking_toggle;
+          const curEff = (ed.reasoningEffort || '').trim().toLowerCase();
+          let effOptsHtml = '';
+          if (!supportsAny) {
+            effOptsHtml = `<option value="">${esc(tr('effortUnsupported'))}</option>`;
+          } else {
+            const list = [{ value: '', label: tr('effortInherit') }];
+            if (caps.supports_thinking_toggle) list.push({ value: 'none', label: pe.formatEffortLabel('none', tr) });
+            for (const lvl of allowedEff) {
+              if (lvl !== 'none') list.push({ value: lvl, label: pe.formatEffortLabel(lvl, tr) });
+            }
+            if (curEff && !list.some((o) => o.value === curEff)) {
+              list.push({ value: curEff, label: pe.formatEffortLabel(curEff, tr) });
+            }
+            effOptsHtml = list
+              .map((o) => `<option value="${esc(o.value)}"${o.value === curEff ? ' selected' : ''}>${esc(o.label)}</option>`)
+              .join('');
+          }
+          inlineEditorHtml = `
+            <div class="hat-member-edit-box" data-edit-member-box="${esc(m.name)}">
+              <div class="hat-plan-row-model">
+                <select class="hat-select hat-select-model" data-edit-field="route">${modelOpts.join('')}</select>
+                <select class="hat-select hat-select-effort" data-edit-field="reasoningEffort"${!supportsAny ? ' disabled' : ''}>${effOptsHtml}</select>
+              </div>
+              ${ed.error ? `<div class="hat-plan-error">${esc(ed.error)}</div>` : ''}
+              <div class="hat-member-edit-actions">
+                <button type="button" class="hat-btn-primary hat-member-edit-save" data-action="save-member-edit"${ed.saving ? ' disabled' : ''}>${esc(tr('save'))}</button>
+                <button type="button" class="hat-btn-secondary hat-member-edit-cancel" data-action="cancel-member-edit">${esc(tr('cancel'))}</button>
+              </div>
+            </div>`;
+        }
+
         return `
-          <div class="hat-member-row">
+          <div class="hat-member-row${isEditingThis ? ' is-editing' : ''}">
             <div class="hat-avatar-wrap${m.unread > 0 ? ' has-unread' : ''}">
               <img class="hat-avatar is-${esc(m.activity || 'idle')}" src="${esc(imgUrl)}" alt="${esc(m.name)}" />
               <img class="hat-action-chip" src="${esc(actionImg)}" alt="${esc(m.activity || 'idle')}" />
@@ -1370,9 +1516,11 @@
                 <span class="hat-member-name">${esc(m.name)}</span>
                 <span class="hat-member-role">${esc(m.role)}</span>
                 ${route ? `<span class="hat-model-pill" title="${esc(route)}${m.reasoningEffort ? ` · ${esc(m.reasoningEffort)}` : ''}">${esc(window.HermesTeamsDag.shortModel(route))}${m.reasoningEffort ? ` · ${esc(m.reasoningEffort)}` : ''}</span>` : ''}
+                ${editBtnHtml}
               </div>
               <div class="hat-member-state${m.spawnError ? ' is-error' : ''}">${esc(m.currentTask || m.spawnError || (allDone ? tr('statusDone') : m.status))}</div>
               ${chips ? `<div class="hat-member-tasks"><span class="hat-member-role">${esc(tr('dispatched'))}</span>${chips}</div>` : ''}
+              ${inlineEditorHtml}
             </div>
             <div class="hat-member-ratio">${m.completedTasks}/${m.totalTasks}</div>
           </div>`;
@@ -1459,6 +1607,116 @@
       uiState.membersCollapsed = !uiState.membersCollapsed;
       render();
     });
+
+    body.querySelectorAll('[data-action="edit-member"]').forEach((btn) => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const mname = btn.getAttribute('data-member-name');
+        const mem = members.find((x) => x.name === mname);
+        if (!mem) return;
+        const pe = window.HermesTeamsPlanEditor;
+        if (uiState.editingMember && uiState.editingMember.teamId === team.id && uiState.editingMember.name === mname) {
+          uiState.editingMember = null;
+          render();
+          return;
+        }
+        const normModel = pe ? pe.normalizeModelId(mem.model || '') : (mem.model || '');
+        uiState.editingMember = {
+          teamId: team.id,
+          name: mem.name,
+          provider: mem.provider || '',
+          model: normModel,
+          reasoningEffort: mem.reasoningEffort || '',
+          saving: false,
+          error: '',
+        };
+        if (pe) {
+          const effTarget = normModel ? { provider: mem.provider || '', model: normModel } : pe.parseRouteString(captainRoute);
+          const [cat] = await Promise.all([
+            pe.loadHermesModelCatalog(getAppBasePath()),
+            pe.loadModelReasoningCaps(getAppBasePath(), effTarget.provider, effTarget.model),
+          ]);
+          uiState.modelCatalog = cat || [];
+        }
+        render();
+      });
+    });
+
+    const editBox = body.querySelector('[data-edit-member-box]');
+    if (editBox && uiState.editingMember) {
+      const routeSel = editBox.querySelector('[data-edit-field="route"]');
+      const effSel = editBox.querySelector('[data-edit-field="reasoningEffort"]');
+      if (routeSel) {
+        routeSel.addEventListener('change', async () => {
+          const pe = window.HermesTeamsPlanEditor;
+          const v = routeSel.value || '';
+          if (!v) {
+            uiState.editingMember.provider = '';
+            uiState.editingMember.model = '';
+          } else {
+            const parts = v.split('::');
+            uiState.editingMember.provider = parts[0] || '';
+            uiState.editingMember.model = pe ? pe.normalizeModelId(parts[1] || '') : (parts[1] || '');
+          }
+          if (pe) {
+            const effTarget = uiState.editingMember.model
+              ? { provider: uiState.editingMember.provider, model: uiState.editingMember.model }
+              : pe.parseRouteString(captainRoute);
+            const caps = await pe.loadModelReasoningCaps(getAppBasePath(), effTarget.provider, effTarget.model);
+            const cur = (uiState.editingMember.reasoningEffort || '').trim().toLowerCase();
+            if (cur) {
+              const allowed = new Set(caps.supported_efforts || []);
+              if (caps.supports_thinking_toggle) allowed.add('none');
+              if (!allowed.has(cur)) uiState.editingMember.reasoningEffort = '';
+            }
+          }
+          render();
+        });
+      }
+      if (effSel) {
+        effSel.addEventListener('change', () => {
+          uiState.editingMember.reasoningEffort = effSel.value || '';
+        });
+      }
+      const cancelBtn = editBox.querySelector('[data-action="cancel-member-edit"]');
+      if (cancelBtn) {
+        cancelBtn.addEventListener('click', () => {
+          uiState.editingMember = null;
+          render();
+        });
+      }
+      const saveBtn = editBox.querySelector('[data-action="save-member-edit"]');
+      if (saveBtn) {
+        saveBtn.addEventListener('click', async () => {
+          if (!uiState.editingMember || uiState.editingMember.saving) return;
+          uiState.editingMember.saving = true;
+          uiState.editingMember.error = '';
+          render();
+          try {
+            await apiFetch('/api/v1/member/update', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                teamId: team.id,
+                workspace: team.workspace,
+                name: uiState.editingMember.name,
+                provider: uiState.editingMember.provider,
+                model: uiState.editingMember.model,
+                reasoningEffort: uiState.editingMember.reasoningEffort,
+              }),
+            });
+            uiState.editingMember = null;
+            await refreshState(true);
+          } catch (err) {
+            if (uiState.editingMember) {
+              uiState.editingMember.saving = false;
+              uiState.editingMember.error = (err && err.message) || 'Error';
+            }
+            render();
+          }
+        });
+      }
+    }
 
     body.querySelectorAll('[data-select-task]').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -1694,6 +1952,126 @@
         render();
       });
     });
+  }
+
+  function renderResolutionWorkspace(body, team) {
+    const art = window.HermesTeamsArtwork;
+    if (!team) {
+      body.innerHTML = `
+        <div class="hat-empty-state">
+          <img src="${esc(art.LEAD_ART)}" alt="Captain Ferris" />
+          <div><strong>${esc(tr('resolutionTitle'))}</strong></div>
+          <p>${esc(tr('resolutionEmpty'))}</p>
+        </div>`;
+      return;
+    }
+
+    const tasks = team.tasks || [];
+    const stats = team.stats || { total: tasks.length, completed: 0, failed: 0 };
+    const currentText = uiState.resolutionDirty ? uiState.resolutionDraft : (team.resolution || '');
+    const justSaved = uiState.resolutionSavedAt && Date.now() - uiState.resolutionSavedAt < 4000;
+
+    const taskCards = tasks.length
+      ? tasks
+          .map((t) => {
+            const stCls =
+              t.status === 'completed'
+                ? 'is-done'
+                : t.status === 'failed'
+                  ? 'is-halted'
+                  : 'is-running';
+            return `
+              <div class="hat-resolution-task-card">
+                <div class="hat-resolution-task-head">
+                  <span class="hat-task-badge">${esc(t.id)}</span>
+                  <span class="hat-resolution-task-subj">${esc(t.subject)}</span>
+                  <span class="hat-member-role">${esc(t.assignee || tr('unassigned'))}</span>
+                  ${t.verdict ? `<span class="hat-status-pill is-${t.verdict === 'pass' ? 'done' : 'halted'}">${esc(t.verdict)}</span>` : ''}
+                  <span class="hat-status-pill ${stCls}">${esc(t.status)}</span>
+                </div>
+                ${
+                  t.output
+                    ? `<div class="hat-resolution-task-output">${esc(t.output)}</div>`
+                    : `<div class="hat-resolution-task-empty">${esc(tr('resolutionEmpty'))}</div>`
+                }
+              </div>`;
+          })
+          .join('')
+      : `<div class="hat-empty-dag">${esc(tr('resolutionEmpty'))}</div>`;
+
+    body.innerHTML = `
+      <div class="hat-resolution-shell">
+        <div class="hat-resolution-banner">
+          <div class="hat-resolution-banner-top">
+            <strong>✓ ${esc(tr('resolutionTitle'))} · ${esc(team.name)}</strong>
+            <span class="hat-status-pill is-done">${stats.completed}/${stats.total} ${esc(tr('done'))} · ⏱ ${esc(formatDuration(computeTeamElapsedMs(team)))}</span>
+          </div>
+          <div class="hat-resolution-hint">${esc(tr('resolutionCloseHint'))}</div>
+        </div>
+
+        <div class="hat-resolution-editor">
+          <div class="hat-plan-section-head">
+            <span>${esc(tr('resolutionSummaryLabel'))}</span>
+            ${justSaved ? `<span class="hat-resolution-saved">✓ ${esc(tr('resolutionSaved'))}</span>` : ''}
+          </div>
+          <textarea class="hat-resolution-textarea" id="hat-resolution-input" rows="5" placeholder="${esc(tr('resolutionPlaceholder'))}"${team.archived ? ' readonly' : ''}>${esc(currentText)}</textarea>
+          ${
+            !team.archived
+              ? `<div class="hat-resolution-actions">
+                  <button type="button" class="hat-btn-primary" data-action="save-resolution">${esc(tr('resolutionSave'))}</button>
+                  <button type="button" class="hat-btn-secondary" data-action="ask-resolution-captain">💬 ${esc(tr('chatAskReport'))}</button>
+                  <button type="button" class="hat-btn-danger" data-action="delete" title="${esc(tr('deleteTeam'))}">🗑 ${esc(
+                    uiState.deleteArmed ? tr('confirmDelete') : tr('deleteTeam')
+                  )}</button>
+                </div>`
+              : ''
+          }
+        </div>
+
+        <div class="hat-resolution-tasks">
+          <div class="hat-plan-section-head">
+            <span>${esc(tr('resolutionTasksTitle'))} (${tasks.length})</span>
+          </div>
+          <div class="hat-resolution-task-list">${taskCards}</div>
+        </div>
+      </div>
+    `;
+
+    const ta = body.querySelector('#hat-resolution-input');
+    if (ta) {
+      ta.addEventListener('input', () => {
+        uiState.resolutionDirty = true;
+        uiState.resolutionDraft = ta.value;
+      });
+    }
+    const saveResBtn = body.querySelector('[data-action="save-resolution"]');
+    if (saveResBtn) {
+      saveResBtn.addEventListener('click', async () => {
+        const val = ta ? ta.value : uiState.resolutionDraft;
+        saveResBtn.disabled = true;
+        try {
+          await apiFetch('/api/v1/team/resolution', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              teamId: team.id,
+              workspace: team.workspace,
+              resolution: val,
+            }),
+          });
+          uiState.resolutionDirty = false;
+          uiState.resolutionDraft = val;
+          uiState.resolutionSavedAt = Date.now();
+          await refreshState(true);
+        } catch (_err) {
+          saveResBtn.disabled = false;
+        }
+      });
+    }
+    const askCapBtn = body.querySelector('[data-action="ask-resolution-captain"]');
+    if (askCapBtn) {
+      askCapBtn.addEventListener('click', () => triggerCaptainReport(team));
+    }
   }
 
   function renderTaskInspector(task) {

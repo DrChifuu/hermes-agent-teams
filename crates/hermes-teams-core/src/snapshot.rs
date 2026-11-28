@@ -99,6 +99,8 @@ pub struct TeamSnapshot {
     pub archived: bool,
     pub halted: bool,
     pub escalated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<String>,
     pub created_at: u64,
     pub stats: TeamStats,
     pub members: Vec<SnapshotMember>,
@@ -276,6 +278,7 @@ fn build_team_snapshot_with_dir(
         archived,
         halted: team.is_halted(),
         escalated: team.escalated.unwrap_or(false),
+        resolution: team.resolution.clone(),
         created_at: team.created_at,
         stats,
         members,

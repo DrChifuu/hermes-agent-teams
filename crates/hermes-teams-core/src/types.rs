@@ -592,6 +592,8 @@ pub struct TeamState {
     pub review_policy: Option<ReviewPolicy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub escalated: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<String>,
 }
 
 impl TeamState {

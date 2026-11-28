@@ -656,5 +656,11 @@
 
   window.HermesTeamsPlanEditor = {
     renderPlanEditor,
+    loadHermesModelCatalog,
+    loadModelReasoningCaps,
+    getCachedReasoningCaps,
+    normalizeModelId,
+    parseRouteString,
+    formatEffortLabel,
   };
 })();

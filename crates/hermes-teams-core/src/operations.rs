@@ -152,6 +152,24 @@ pub struct AddMemberInput {
     pub captain_reasoning_effort: Option<String>,
 }
 
+/// Input for updating an existing team member in-place (model, provider, reasoning effort, role, policy).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateMemberInput {
+    pub team_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub tool_policy: Option<String>,
+}
+
 /// Input for `agent_teams_create_task`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -394,6 +412,7 @@ impl TeamEngine {
             halt_reason: None,
             review_policy,
             escalated: None,
+            resolution: None,
         };
 
         self.apply_plan_members(
@@ -717,6 +736,25 @@ impl TeamEngine {
             ));
         }
         if team.find_member(name).is_some() {
+            // If the team is paused/halted or the existing member is idle/errored, update it
+            // in-place instead of forcing the caller to create duplicate mini-agents.
+            let can_update_in_place = team.is_halted()
+                || team.is_staged()
+                || team
+                    .find_member(name)
+                    .map(|m| m.status != MemberStatus::Working || m.spawn_error.is_some())
+                    .unwrap_or(false);
+            if can_update_in_place {
+                return self.update_member(UpdateMemberInput {
+                    team_id: input.team_id,
+                    name: name.to_string(),
+                    role: input.role,
+                    provider: input.provider,
+                    model: input.model,
+                    reasoning_effort: input.reasoning_effort,
+                    tool_policy: input.tool_policy,
+                });
+            }
             return Err(TeamsError::MemberAlreadyExists(name.to_string()));
         }
         if team.active_members_count() >= self.config.max_members {
@@ -1148,7 +1186,7 @@ impl TeamEngine {
                     team_id: team.id.clone(),
                     captain_session_id: team.captain_session_id.clone(),
                     message: format!(
-                        "All {} tasks in team '{}' have finished. Review results with agent_teams_status, deliver your consolidated report, and archive with agent_teams_delete.",
+                        "All {} tasks in team '{}' have finished. Review results with agent_teams_status and deliver your consolidated final report. Do NOT call agent_teams_delete automatically — leave the team open so the user can inspect the Resolution tab and close/delete it manually.",
                         team.tasks.len(),
                         team.name
                     ),
@@ -1471,6 +1509,124 @@ impl TeamEngine {
             summary: format!("Resumed team '{}' (reason: {reason}).", team.id),
             team,
             directives: sched.directives,
+            extra: BTreeMap::new(),
+        })
+    }
+
+    /// Update an existing team member's model/provider/reasoning effort/role in-place
+    /// without spawning duplicate mini-agents. When the team is paused/halted, preserves the
+    /// paused state; when active and the member has ready work, dispatches immediately.
+    pub fn update_member(&self, input: UpdateMemberInput) -> Result<OperationOutput> {
+        let mut team = self.store.load_team(&input.team_id)?;
+        let name = input.name.trim();
+        let mut directives = Vec::new();
+
+        let (resolved_policy_opt, resolved_filter_opt) = match input.tool_policy.as_deref().map(str::trim) {
+            Some(pid) if !pid.is_empty() => {
+                let filter = self.config.resolve_policy_id(pid)?;
+                (Some(pid.to_string()), Some(filter))
+            }
+            _ => (None, None),
+        };
+
+        let captain_id = team.captain_session_id.clone();
+        let team_id = team.id.clone();
+        let is_halted = team.is_halted();
+        let is_staged = team.is_staged();
+
+        let member = team
+            .find_member_mut(name)
+            .ok_or_else(|| TeamsError::MemberNotFound(name.to_string()))?;
+
+        // If a previous subagent handle existed and the member is being reconfigured, cancel it if
+        // still working and clear `id` so the next launch binds cleanly to the new model/effort.
+        let old_subagent_id = member.id.clone();
+        let was_working = member.status == MemberStatus::Working;
+        if let Some(role) = input.role.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            member.role = Some(role.to_string());
+        }
+        if let Some(prov) = input.provider {
+            let trimmed = prov.trim();
+            member.provider = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            };
+        }
+        if let Some(mod_id) = input.model {
+            let trimmed = mod_id.trim();
+            member.model = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            };
+        }
+        if let Some(eff) = input.reasoning_effort {
+            let trimmed = eff.trim();
+            member.reasoning_effort = if trimmed.is_empty() || trimmed == "default" {
+                None
+            } else {
+                Some(trimmed.to_string())
+            };
+        }
+        if let Some(pid) = resolved_policy_opt {
+            member.tool_policy = Some(pid);
+            member.tool_filter = resolved_filter_opt;
+        }
+
+        member.active_provider = None;
+        member.active_model = None;
+        member.fallback_active = None;
+        member.spawn_error = None;
+        member.id = String::new();
+        member.status = MemberStatus::Idle;
+
+        if was_working && !old_subagent_id.is_empty() {
+            directives.push(EngineDirective::CancelMember {
+                team_id: team_id.clone(),
+                captain_session_id: captain_id,
+                member_name: name.to_string(),
+                subagent_id: old_subagent_id,
+                reason: format!("member '{name}' model/effort updated in-place"),
+            });
+            // Release any active task held by the cancelled turn so it re-dispatches cleanly on the new model.
+            for t in &mut team.tasks {
+                if t.assignee.as_deref() == Some(name) && t.status.is_active() {
+                    t.status = TaskStatus::Pending;
+                    t.attempt_id = None;
+                    t.updated_at = now_ms();
+                }
+            }
+        }
+
+        if !is_staged && !is_halted {
+            let sched = schedule_ready_tasks(&mut team);
+            directives.extend(sched.directives);
+        }
+
+        self.store.save_team(&team)?;
+        Ok(OperationOutput {
+            summary: format!("Updated member '{name}' in-place in team '{}'.", team.id),
+            team,
+            directives,
+            extra: BTreeMap::new(),
+        })
+    }
+
+    /// Persist a consolidated final resolution summary for a team (shown in the WebUI Resolution tab).
+    pub fn set_resolution(&self, team_id: &str, resolution: String) -> Result<OperationOutput> {
+        let mut team = self.store.load_team(team_id)?;
+        let trimmed = resolution.trim();
+        team.resolution = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        };
+        self.store.save_team(&team)?;
+        Ok(OperationOutput {
+            summary: format!("Saved resolution summary for team '{}'.", team.id),
+            team,
+            directives: Vec::new(),
             extra: BTreeMap::new(),
         })
     }

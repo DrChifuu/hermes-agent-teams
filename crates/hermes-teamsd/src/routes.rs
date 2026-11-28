@@ -9,7 +9,7 @@ use axum::{Json, Router};
 use futures_core::Stream;
 use hermes_teams_core::operations::{
     AddMemberInput, AmendTaskInput, CreateTaskInput, CreateTeamInput, EditPlanInput,
-    ReassignTaskInput, SendMessageInput, UpdateTaskInput,
+    ReassignTaskInput, SendMessageInput, UpdateMemberInput, UpdateTaskInput,
 };
 use hermes_teams_core::snapshot::collect_workspace_activity_opts;
 use hermes_teams_core::{TeamsError, WorkspaceActivityPayload};
@@ -46,6 +46,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/team/halt", post(team_halt_handler))
         .route("/api/v1/team/resume", post(team_resume_handler))
         .route("/api/v1/team/delete", post(team_delete_handler))
+        .route("/api/v1/team/resolution", post(team_resolution_handler))
+        .route("/api/v1/member/update", post(member_update_handler))
         .with_state(state)
 }
 
@@ -740,6 +742,52 @@ async fn team_delete_handler(
         "deleted": body.team_id,
         "archived": body.archived,
     })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WebUpdateMemberBody {
+    #[serde(default)]
+    workspace: Option<String>,
+    #[serde(flatten)]
+    input: UpdateMemberInput,
+}
+
+async fn member_update_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<WebUpdateMemberBody>,
+) -> Result<Json<Value>, ApiError> {
+    verify_request_auth(state.auth_mode(), &headers)?;
+    let ws = state.resolve_workspace_for_team(body.workspace.as_deref(), &body.input.team_id);
+    let out = state.with_engine(&ws, |engine| engine.update_member(body.input))?;
+    state.enqueue_directives(&ws, out.directives.clone());
+    state.publish_event(&ws, Some(out.team.id.clone()), "member_updated");
+    Ok(Json(serde_json::to_value(out)?))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TeamResolutionBody {
+    #[serde(default)]
+    workspace: Option<String>,
+    team_id: String,
+    #[serde(default)]
+    resolution: String,
+}
+
+async fn team_resolution_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<TeamResolutionBody>,
+) -> Result<Json<Value>, ApiError> {
+    verify_request_auth(state.auth_mode(), &headers)?;
+    let ws = state.resolve_workspace_for_team(body.workspace.as_deref(), &body.team_id);
+    let out = state.with_engine(&ws, |engine| {
+        engine.set_resolution(&body.team_id, body.resolution)
+    })?;
+    state.publish_event(&ws, Some(out.team.id.clone()), "resolution_saved");
+    Ok(Json(serde_json::to_value(out)?))
 }
 
 /// Compact tool response for LLM tool calls (avoids bloating Captain context with 50KB of historical outputs).
