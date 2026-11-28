@@ -373,8 +373,11 @@
           continue;
         }
         const errBody = await res.json().catch(() => ({}));
-        throw new Error(errBody.error || `HTTP ${res.status}`);
+        const appErr = new Error(errBody.error || `HTTP ${res.status}`);
+        appErr._httpAppError = true;
+        throw appErr;
       } catch (err) {
+        if (err && err._httpAppError) throw err;
         lastErr = err;
       }
     }

@@ -473,7 +473,23 @@ impl TeamEngine {
                 }
             }
         }
-        if let Some(members) = input.members {
+        if let Some(mut members) = input.members {
+            let prev_prompts: BTreeMap<String, String> = team
+                .members
+                .iter()
+                .filter_map(|m| {
+                    m.execution_prompt
+                        .as_ref()
+                        .map(|ep| (m.name.clone(), ep.clone()))
+                })
+                .collect();
+            for m in &mut members {
+                if m.execution_prompt.is_none() {
+                    if let Some(ep) = prev_prompts.get(m.name.trim()) {
+                        m.execution_prompt = Some(ep.clone());
+                    }
+                }
+            }
             team.members.clear();
             let eff_provider = input
                 .captain_provider
@@ -498,7 +514,45 @@ impl TeamEngine {
                 eff_effort_owned.as_deref(),
             )?;
         }
-        if let Some(tasks) = input.tasks {
+        if let Some(mut tasks) = input.tasks {
+            let prev_tasks: BTreeMap<String, TeamTask> = team
+                .tasks
+                .iter()
+                .map(|t| (t.id.clone(), t.clone()))
+                .collect();
+            for row in &mut tasks {
+                if let Some(prev) = row
+                    .id
+                    .as_deref()
+                    .map(str::trim)
+                    .and_then(|id| prev_tasks.get(id))
+                {
+                    if row.description.is_none() {
+                        row.description = prev.description.clone();
+                    }
+                    if row.objective.is_none() {
+                        row.objective = prev.objective.clone();
+                    }
+                    if row.in_scope.is_none() {
+                        row.in_scope = prev.in_scope.clone();
+                    }
+                    if row.out_of_scope.is_none() {
+                        row.out_of_scope = prev.out_of_scope.clone();
+                    }
+                    if row.acceptance.is_none() {
+                        row.acceptance = prev.acceptance.clone();
+                    }
+                    if row.verify.is_none() {
+                        row.verify = prev.verify.clone();
+                    }
+                    if row.reviewed_task_id.is_none() {
+                        row.reviewed_task_id = prev.reviewed_task_id.clone();
+                    }
+                    if row.coverage_of.is_none() {
+                        row.coverage_of = prev.coverage_of.clone();
+                    }
+                }
+            }
             team.tasks.clear();
             team.task_seq = 0;
             Self::apply_plan_tasks(&mut team, tasks)?;
