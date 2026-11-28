@@ -263,12 +263,19 @@ def register(ctx: Any) -> None:
     )
 
     # Inject concise fixed Captain protocol section without rewriting prompts per turn.
+    # Hermes enforces `1 <= max_chars <= 4000`; clamp & guard so a prompt-budget mismatch
+    # can NEVER abort register(ctx) or roll back the 14 agent_teams_* tools.
     if callable(getattr(ctx, "register_system_prompt_section", None)):
-        ctx.register_system_prompt_section(
-            PLUGIN_NAME,
-            CAPTAIN_PROTOCOL_SECTION,
-            max_chars=MAX_PROMPT_CHARS,
-        )
+        try:
+            effective_max = max(1, min(int(MAX_PROMPT_CHARS), 4000))
+            section_text = CAPTAIN_PROTOCOL_SECTION[:effective_max]
+            ctx.register_system_prompt_section(
+                PLUGIN_NAME,
+                section_text,
+                max_chars=effective_max,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("Could not register %s system prompt section: %s", PLUGIN_NAME, exc)
 
     # Gesture boundary: plain-text `/agent-teams <goal>` on surfaces without command adjudication.
     def _pre_llm_call(event: dict[str, Any] | None = None, **_kwargs: Any) -> dict[str, Any] | None:
