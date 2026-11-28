@@ -10,6 +10,64 @@
   }
 
   let cachedCatalog = null;
+  const draftCache = new Map();
+  const DRAFT_STORAGE_PREFIX = 'hat_staged_draft_v1_';
+
+  function loadCachedDraft(teamId, serverUpdatedAt) {
+    if (!teamId) return null;
+    let entry = draftCache.get(teamId) || null;
+    if (!entry) {
+      try {
+        const raw = window.sessionStorage && window.sessionStorage.getItem(DRAFT_STORAGE_PREFIX + teamId);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.draft && Array.isArray(parsed.draft.members) && Array.isArray(parsed.draft.tasks)) {
+            entry = parsed;
+            draftCache.set(teamId, entry);
+          }
+        }
+      } catch (_e) {
+        // ignore storage errors
+      }
+    }
+    if (!entry) return null;
+    const srvTs = Number(serverUpdatedAt || 0);
+    const baseTs = Number(entry.baseUpdatedAt || 0);
+    // If the server plan was updated by Captain in chat after our local edits, prefer the fresh server plan.
+    if (srvTs && baseTs && srvTs > baseTs) {
+      clearCachedDraft(teamId);
+      return null;
+    }
+    return entry.draft;
+  }
+
+  function saveCachedDraft(teamId, serverUpdatedAt, draft) {
+    if (!teamId || !draft) return;
+    const entry = {
+      baseUpdatedAt: Number(serverUpdatedAt || 0),
+      draft: JSON.parse(JSON.stringify(draft)),
+    };
+    draftCache.set(teamId, entry);
+    try {
+      if (window.sessionStorage) {
+        window.sessionStorage.setItem(DRAFT_STORAGE_PREFIX + teamId, JSON.stringify(entry));
+      }
+    } catch (_e) {
+      // ignore storage quota/privacy errors
+    }
+  }
+
+  function clearCachedDraft(teamId) {
+    if (!teamId) return;
+    draftCache.delete(teamId);
+    try {
+      if (window.sessionStorage) {
+        window.sessionStorage.removeItem(DRAFT_STORAGE_PREFIX + teamId);
+      }
+    } catch (_e) {
+      // ignore
+    }
+  }
 
   function getAppBasePath() {
     const path = (window.location.pathname || '/').replace(/\/session\/[^/?#]+.*$/, '');
@@ -49,44 +107,60 @@
   function renderPlanEditor(container, team, opts) {
     const tr = opts.tr;
     const art = window.HermesTeamsArtwork;
-    const draft = {
-      description: team.description || '',
-      members: (team.members || []).map((m) => ({
-        name: m.name,
-        role: m.role || '',
-        provider: m.provider || '',
-        model: m.model || '',
-        reasoningEffort: m.reasoningEffort || '',
-        executionPrompt: m.executionPrompt || undefined,
-        toolPolicy: m.toolPolicy || undefined,
-      })),
-      tasks: (team.tasks || []).map((t) => ({
-        id: t.id,
-        subject: t.subject,
-        description: t.description || undefined,
-        assignee: t.assignee || '',
-        dependencies: Array.isArray(t.dependencies) ? t.dependencies.slice() : [],
-        kind: t.kind || undefined,
-        objective: t.objective || undefined,
-        inScope: t.inScope || undefined,
-        outOfScope: t.outOfScope || undefined,
-        acceptance: t.acceptance || undefined,
-        verify: t.verify || undefined,
-        reviewedTaskId: t.reviewedTaskId || undefined,
-        coverageOf: t.coverageOf || undefined,
-      })),
-    };
+    const restored = loadCachedDraft(team.id, team.updatedAt);
+    const draft = restored
+      ? JSON.parse(JSON.stringify(restored))
+      : {
+          description: team.description || '',
+          members: (team.members || []).map((m) => ({
+            name: m.name,
+            role: m.role || '',
+            provider: m.provider || '',
+            model: m.model || '',
+            reasoningEffort: m.reasoningEffort || '',
+            executionPrompt: m.executionPrompt || undefined,
+            toolPolicy: m.toolPolicy || undefined,
+          })),
+          tasks: (team.tasks || []).map((t) => ({
+            id: t.id,
+            subject: t.subject,
+            description: t.description || undefined,
+            assignee: t.assignee || '',
+            dependencies: Array.isArray(t.dependencies) ? t.dependencies.slice() : [],
+            kind: t.kind || undefined,
+            objective: t.objective || undefined,
+            inScope: t.inScope || undefined,
+            outOfScope: t.outOfScope || undefined,
+            acceptance: t.acceptance || undefined,
+            verify: t.verify || undefined,
+            reviewedTaskId: t.reviewedTaskId || undefined,
+            coverageOf: t.coverageOf || undefined,
+          })),
+        };
 
     let discardArmed = false;
-    let dirty = false;
+    let dirty = !!restored;
     let busy = false;
     let errorMsg = '';
+
+    function persistLocalDraft() {
+      if (dirty) {
+        saveCachedDraft(team.id, team.updatedAt, draft);
+      } else {
+        clearCachedDraft(team.id);
+      }
+    }
 
     function setDirty(val) {
       dirty = val;
       if (typeof opts.onDirtyChange === 'function') {
         opts.onDirtyChange(val);
       }
+      persistLocalDraft();
+    }
+
+    if (restored && typeof opts.onDirtyChange === 'function') {
+      opts.onDirtyChange(true);
     }
 
     loadHermesModelCatalog(opts.appBasePath).then((catalog) => {
@@ -248,7 +322,6 @@
           const idx = Number(row.getAttribute('data-midx'));
           row.querySelectorAll('[data-field]').forEach((el) => {
             const syncMember = () => {
-              setDirty(true);
               const f = el.getAttribute('data-field');
               if (f === 'route') {
                 const v = el.value || '';
@@ -263,13 +336,14 @@
               } else {
                 draft.members[idx][f] = el.value;
               }
+              setDirty(true);
             };
             el.addEventListener('change', syncMember);
             if (el.tagName === 'INPUT') el.addEventListener('input', syncMember);
           });
           row.querySelector('.hat-remove-member').addEventListener('click', () => {
-            setDirty(true);
             draft.members.splice(idx, 1);
+            setDirty(true);
             paint();
           });
         });
@@ -278,7 +352,6 @@
           const idx = Number(row.getAttribute('data-tidx'));
           row.querySelectorAll('[data-field]').forEach((el) => {
             const syncTask = () => {
-              setDirty(true);
               const f = el.getAttribute('data-field');
               if (f === 'dependencies') {
                 draft.tasks[idx].dependencies = el.value
@@ -288,19 +361,19 @@
               } else {
                 draft.tasks[idx][f] = el.value;
               }
+              setDirty(true);
             };
             el.addEventListener('change', syncTask);
             if (el.tagName === 'INPUT') el.addEventListener('input', syncTask);
           });
           row.querySelector('.hat-remove-task').addEventListener('click', () => {
-            setDirty(true);
             draft.tasks.splice(idx, 1);
+            setDirty(true);
             paint();
           });
         });
 
         container.querySelector('[data-action="add-deployer"]').addEventListener('click', () => {
-          setDirty(true);
           const baseName = draft.members.some((m) => m.name === 'deployer')
             ? `deployer-${draft.members.length + 1}`
             : 'deployer';
@@ -312,11 +385,11 @@
             reasoningEffort: '',
             toolPolicy: 'deploy',
           });
+          setDirty(true);
           paint();
         });
 
         container.querySelector('[data-action="add-member"]').addEventListener('click', () => {
-          setDirty(true);
           draft.members.push({
             name: `member-${draft.members.length + 1}`,
             role: 'engineer',
@@ -324,17 +397,18 @@
             model: '',
             reasoningEffort: '',
           });
+          setDirty(true);
           paint();
         });
 
         container.querySelector('[data-action="add-task"]').addEventListener('click', () => {
-          setDirty(true);
           draft.tasks.push({
             id: `t${draft.tasks.length + 1}`,
             subject: '',
             assignee: draft.members[0] ? draft.members[0].name : '',
             dependencies: [],
           });
+          setDirty(true);
           paint();
         });
 
@@ -379,6 +453,10 @@
           busy = true;
           errorMsg = '';
           try {
+            if (dirty) {
+              await opts.onSaveDraft(team.id, cleanDraft(draft));
+              setDirty(false);
+            }
             await opts.onFeedback(team.id);
           } catch (err) {
             errorMsg = (err && err.message) || 'Failed to request feedback';
@@ -398,6 +476,7 @@
           busy = true;
           errorMsg = '';
           try {
+            clearCachedDraft(team.id);
             await opts.onDiscard(team.id);
           } catch (err) {
             errorMsg = (err && err.message) || 'Failed to discard plan';
